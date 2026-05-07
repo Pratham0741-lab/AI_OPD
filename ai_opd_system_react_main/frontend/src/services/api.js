@@ -1,3 +1,6 @@
+// ── Base URL (configurable via environment variable for deployment) ──
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
+
 // Helper function to get auth headers
 const getAuthHeaders = () => {
   const token = localStorage.getItem("token");
@@ -19,7 +22,7 @@ const handleAuthError = (response) => {
 
 export const saveConsultation = async (data) => {
   try {
-    const response = await fetch("http://localhost:5000/api/consultation", {
+    const response = await fetch(`${API_BASE}/api/consultation`, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify(data)
@@ -33,14 +36,14 @@ export const saveConsultation = async (data) => {
     return result;
   } catch (error) {
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
-      throw new Error("Cannot connect to backend server (port 5000). Is it running?");
+      throw new Error("Cannot connect to backend server. Is it running?");
     }
     throw error;
   }
 };
 
 export const getConsultations = async () => {
-  const response = await fetch("http://localhost:5000/api/history", {
+  const response = await fetch(`${API_BASE}/api/history`, {
     headers: getAuthHeaders()
   });
   if (!response.ok) {
@@ -51,21 +54,21 @@ export const getConsultations = async () => {
 };
 
 export const getConsultationById = async (id) => {
-  const response = await fetch(`http://localhost:5000/api/consultation/${id}`, {
+  const response = await fetch(`${API_BASE}/api/consultation/${id}`, {
     headers: getAuthHeaders()
   });
   return response.json();
 };
 
 export const generateReport = async (id) => {
-  const response = await fetch(`http://localhost:5000/api/report/${id}`, {
+  const response = await fetch(`${API_BASE}/api/report/${id}`, {
     headers: getAuthHeaders()
   });
   return response.json();
 };
 
 export const getAllReports = async () => {
-  const response = await fetch("http://localhost:5000/api/reports", {
+  const response = await fetch(`${API_BASE}/api/reports`, {
     headers: getAuthHeaders()
   });
   return response.json();
@@ -73,7 +76,7 @@ export const getAllReports = async () => {
 
 // AI Report Generation
 export const generateAIReport = async (transcript, patientInfo) => {
-  const response = await fetch("http://localhost:5000/api/ai-report", {
+  const response = await fetch(`${API_BASE}/api/ai-report`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ transcript, patientInfo })
@@ -82,7 +85,7 @@ export const generateAIReport = async (transcript, patientInfo) => {
 };
 
 export const updateConsultationWithAIReport = async (id, reportData) => {
-  const response = await fetch(`http://localhost:5000/api/consultation/${id}/ai-report`, {
+  const response = await fetch(`${API_BASE}/api/consultation/${id}/ai-report`, {
     method: "PUT",
     headers: getAuthHeaders(),
     body: JSON.stringify(reportData)
@@ -98,7 +101,7 @@ export const transcribeAudio = async (audioBlob, language = 'english') => {
   formData.append('audio', audioBlob, 'recording.wav');
   formData.append('language', language);
   
-  const response = await fetch("http://localhost:5000/api/transcribe", {
+  const response = await fetch(`${API_BASE}/api/transcribe`, {
     method: "POST",
     headers: {
       "Authorization": token ? `Bearer ${token}` : ""
@@ -112,11 +115,12 @@ export const transcribeAudio = async (audioBlob, language = 'english') => {
 
 // GPU ASR Transcription (via Python Voice Assistant backend)
 export const transcribeWithGPU = async (audioBlob, language = 'auto') => {
+  const VA_BASE = process.env.REACT_APP_VA_URL || "http://localhost:8000";
   const formData = new FormData();
   formData.append('audio_file', audioBlob, 'recording.webm');
   formData.append('language', language);
   
-  const response = await fetch("http://localhost:8000/api/va/transcribe-consultation", {
+  const response = await fetch(`${VA_BASE}/api/va/transcribe-consultation`, {
     method: "POST",
     body: formData
   });
@@ -126,7 +130,7 @@ export const transcribeWithGPU = async (audioBlob, language = 'auto') => {
 
 // Translation API
 export const translateText = async (text, targetLanguage) => {
-  const response = await fetch("http://localhost:5000/api/translate", {
+  const response = await fetch(`${API_BASE}/api/translate`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ text, targetLanguage })
@@ -135,7 +139,7 @@ export const translateText = async (text, targetLanguage) => {
 };
 
 export const translateConsultation = async (consultation, targetLanguage) => {
-  const response = await fetch("http://localhost:5000/api/translate-consultation", {
+  const response = await fetch(`${API_BASE}/api/translate-consultation`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ consultation, targetLanguage })
@@ -144,7 +148,7 @@ export const translateConsultation = async (consultation, targetLanguage) => {
 };
 
 export const detectLanguage = async (text) => {
-  const response = await fetch("http://localhost:5000/api/detect-language", {
+  const response = await fetch(`${API_BASE}/api/detect-language`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ text })
@@ -154,14 +158,14 @@ export const detectLanguage = async (text) => {
 
 // Profile API
 export const getProfile = async () => {
-  const response = await fetch("http://localhost:5000/api/profile", {
+  const response = await fetch(`${API_BASE}/api/profile`, {
     headers: getAuthHeaders()
   });
   return response.json();
 };
 
 export const updateProfile = async (profileData) => {
-  const response = await fetch("http://localhost:5000/api/profile", {
+  const response = await fetch(`${API_BASE}/api/profile`, {
     method: "PUT",
     headers: getAuthHeaders(),
     body: JSON.stringify(profileData)
@@ -171,14 +175,14 @@ export const updateProfile = async (profileData) => {
 
 // Notification API
 export const getNotifications = async () => {
-  const response = await fetch("http://localhost:5000/api/notifications", {
+  const response = await fetch(`${API_BASE}/api/notifications`, {
     headers: getAuthHeaders()
   });
   return response.json();
 };
 
 export const createNotification = async (message) => {
-  const response = await fetch("http://localhost:5000/api/notifications", {
+  const response = await fetch(`${API_BASE}/api/notifications`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ message })
@@ -187,7 +191,7 @@ export const createNotification = async (message) => {
 };
 
 export const markNotificationAsRead = async (id) => {
-  const response = await fetch(`http://localhost:5000/api/notifications/${id}/read`, {
+  const response = await fetch(`${API_BASE}/api/notifications/${id}/read`, {
     method: "PUT",
     headers: getAuthHeaders()
   });
@@ -195,7 +199,7 @@ export const markNotificationAsRead = async (id) => {
 };
 
 export const markAllNotificationsAsRead = async () => {
-  const response = await fetch("http://localhost:5000/api/notifications/read-all", {
+  const response = await fetch(`${API_BASE}/api/notifications/read-all`, {
     method: "PUT",
     headers: getAuthHeaders()
   });
@@ -203,7 +207,7 @@ export const markAllNotificationsAsRead = async () => {
 };
 
 export const deleteNotification = async (id) => {
-  const response = await fetch(`http://localhost:5000/api/notifications/${id}`, {
+  const response = await fetch(`${API_BASE}/api/notifications/${id}`, {
     method: "DELETE",
     headers: getAuthHeaders()
   });
@@ -212,14 +216,14 @@ export const deleteNotification = async (id) => {
 
 // Appointments API
 export const getAppointments = async () => {
-  const response = await fetch("http://localhost:5000/api/appointments", {
+  const response = await fetch(`${API_BASE}/api/appointments`, {
     headers: getAuthHeaders()
   });
   return response.json();
 };
 
 export const createAppointment = async (appointmentData) => {
-  const response = await fetch("http://localhost:5000/api/appointments", {
+  const response = await fetch(`${API_BASE}/api/appointments`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(appointmentData)
@@ -228,7 +232,7 @@ export const createAppointment = async (appointmentData) => {
 };
 
 export const updateAppointment = async (id, appointmentData) => {
-  const response = await fetch(`http://localhost:5000/api/appointments/${id}`, {
+  const response = await fetch(`${API_BASE}/api/appointments/${id}`, {
     method: "PUT",
     headers: getAuthHeaders(),
     body: JSON.stringify(appointmentData)
@@ -237,7 +241,7 @@ export const updateAppointment = async (id, appointmentData) => {
 };
 
 export const deleteAppointment = async (id) => {
-  const response = await fetch(`http://localhost:5000/api/appointments/${id}`, {
+  const response = await fetch(`${API_BASE}/api/appointments/${id}`, {
     method: "DELETE",
     headers: getAuthHeaders()
   });

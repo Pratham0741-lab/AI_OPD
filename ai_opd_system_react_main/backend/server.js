@@ -1400,23 +1400,12 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+const HOST = process.env.HOST || "0.0.0.0";
+app.listen(PORT, HOST, () => {
   console.log("\n╔════════════════════════════════════════════╗");
   console.log("║     VocabOPD Backend API Server           ║");
-  console.log("║     with PostgreSQL Database              ║");
   console.log("╚════════════════════════════════════════════╝\n");
-  console.log(`✓ Server running on port ${PORT}`);
-  console.log(`✓ API URL: http://localhost:${PORT}`);
-  console.log(`✓ Frontend URL: http://localhost:3000`);
-  console.log(`✓ Database: PostgreSQL (vocabopd)`);
-  console.log("\n📋 Available Endpoints:");
-  console.log(`   GET  http://localhost:${PORT}/`);
-  console.log(`   POST http://localhost:${PORT}/api/consultation`);
-  console.log(`   GET  http://localhost:${PORT}/api/history`);
-  console.log(`   GET  http://localhost:${PORT}/api/consultation/:id`);
-  console.log(`   GET  http://localhost:${PORT}/api/report/:id`);
-  console.log(`   GET  http://localhost:${PORT}/api/reports`);
-  console.log(`   POST http://localhost:${PORT}/api/transcribe`);
-  console.log("\n✓ CORS enabled for http://localhost:3000");
+  console.log(`✓ Server running on ${HOST}:${PORT}`);
+  console.log(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log("✓ Ready to accept requests!\n");
 });

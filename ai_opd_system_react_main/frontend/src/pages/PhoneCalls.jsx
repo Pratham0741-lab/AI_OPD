@@ -136,7 +136,8 @@ function PhoneCalls() {
 
   const loadPatients = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/patients");
+      const VA_BASE = process.env.REACT_APP_VA_URL || "http://localhost:8000";
+      const res = await fetch(`${VA_BASE}/api/patients`);
       const data = await res.json();
       setPatients(Array.isArray(data) ? data : []);
     } catch (err) {

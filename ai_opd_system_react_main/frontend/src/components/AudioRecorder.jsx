@@ -25,7 +25,8 @@ useEffect(() => {
 
 const checkGPUAvailability = async () => {
   try {
-    const response = await fetch("http://localhost:8000/api/va/health", {
+    const VA_BASE = process.env.REACT_APP_VA_URL || "http://localhost:8000";
+    const response = await fetch(`${VA_BASE}/api/va/health`, {
       signal: AbortSignal.timeout(3000),
     });
     const data = await response.json();

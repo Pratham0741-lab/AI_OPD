@@ -34,7 +34,8 @@ const handleSubmit = async (e) => {
   setLoading(true);
   
   try {
-    const response = await fetch("http://localhost:5000/api/login", {
+    const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
+    const response = await fetch(`${API_BASE}/api/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"

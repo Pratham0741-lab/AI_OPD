@@ -4,7 +4,7 @@
  * for GPU-accelerated consultation transcription and Twilio phone calls.
  */
 
-const VA_BASE_URL = "http://localhost:8000";
+const VA_BASE_URL = process.env.REACT_APP_VA_URL || "http://localhost:8000";
 
 /**
  * Transcribe consultation audio using GPU ASR (IndicConformer + Whisper).

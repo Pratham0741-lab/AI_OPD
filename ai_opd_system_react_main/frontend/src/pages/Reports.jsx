@@ -157,7 +157,8 @@ const handlePrescriptionDownload = async (report) => {
   const token = localStorage.getItem("token");
   
   // Open prescription PDF in new tab
-  const url = `http://localhost:5000/api/prescription/${report.id}`;
+  const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
+  const url = `${API_BASE}/api/prescription/${report.id}`;
   
   fetch(url, {
     headers: {
