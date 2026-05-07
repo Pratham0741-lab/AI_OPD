@@ -1,0 +1,398 @@
+/* ============================= */
+/* MODERN PROFESSIONAL REPORTS */
+/* ============================= */
+
+.reports-header{
+display:flex;
+justify-content:space-between;
+align-items:center;
+margin-bottom:32px;
+}
+
+.reports-header-left h1{
+font-size:32px;
+font-weight:700;
+color:#1e3a8a;
+margin:0 0 8px 0;
+}
+
+.reports-header-left p{
+font-size:15px;
+color:#6b7280;
+margin:0;
+}
+
+.btn-generate-report{
+display:flex;
+align-items:center;
+gap:10px;
+padding:12px 24px;
+background:linear-gradient(135deg,#2563eb,#3b82f6);
+color:white;
+border:none;
+border-radius:10px;
+font-size:15px;
+font-weight:600;
+cursor:pointer;
+transition:0.2s;
+box-shadow:0 4px 12px rgba(37,99,235,0.3);
+}
+
+.btn-generate-report:hover{
+transform:translateY(-2px);
+box-shadow:0 6px 16px rgba(37,99,235,0.4);
+}
+
+.reports-stats{
+display:grid;
+grid-template-columns:repeat(4,1fr);
+gap:20px;
+margin-bottom:32px;
+}
+
+.report-stat-card{
+background:white;
+padding:20px;
+border-radius:12px;
+box-shadow:0 2px 8px rgba(0,0,0,0.05);
+border:1px solid #e5e7eb;
+display:flex;
+align-items:center;
+gap:16px;
+transition:0.3s;
+}
+
+.report-stat-card:hover{
+transform:translateY(-4px);
+box-shadow:0 8px 20px rgba(0,0,0,0.1);
+}
+
+.report-stat-card .stat-icon{
+width:48px;
+height:48px;
+border-radius:10px;
+display:flex;
+align-items:center;
+justify-content:center;
+flex-shrink:0;
+}
+
+.report-stat-card .stat-content p{
+font-size:13px;
+color:#6b7280;
+margin:0 0 6px 0;
+font-weight:500;
+}
+
+.report-stat-card .stat-content h3{
+font-size:24px;
+font-weight:700;
+color:#1f2937;
+margin:0;
+}
+
+.reports-controls{
+display:flex;
+gap:16px;
+margin-bottom:24px;
+}
+
+.search-box{
+flex:1;
+position:relative;
+}
+
+.search-box svg{
+position:absolute;
+left:16px;
+top:50%;
+transform:translateY(-50%);
+color:#9ca3af;
+}
+
+.search-box input{
+width:100%;
+padding:12px 16px 12px 48px;
+border:2px solid #e5e7eb;
+border-radius:10px;
+font-size:14px;
+transition:0.2s;
+}
+
+.search-box input:focus{
+outline:none;
+border-color:#2563eb;
+box-shadow:0 0 0 3px rgba(37,99,235,0.1);
+}
+
+.filter-group{
+display:flex;
+gap:12px;
+}
+
+.filter-group select{
+padding:12px 16px;
+border:2px solid #e5e7eb;
+border-radius:10px;
+font-size:14px;
+cursor:pointer;
+transition:0.2s;
+background:white;
+}
+
+.filter-group select:focus{
+outline:none;
+border-color:#2563eb;
+}
+
+.reports-grid{
+display:grid;
+grid-template-columns:repeat(auto-fill,minmax(380px,1fr));
+gap:24px;
+}
+
+.report-card{
+background:white;
+border-radius:12px;
+box-shadow:0 2px 8px rgba(0,0,0,0.05);
+border:1px solid #e5e7eb;
+overflow:hidden;
+transition:0.3s;
+}
+
+.report-card:hover{
+transform:translateY(-4px);
+box-shadow:0 8px 20px rgba(0,0,0,0.1);
+border-color:#2563eb;
+}
+
+.report-card-header{
+padding:20px;
+border-bottom:1px solid #f3f4f6;
+display:flex;
+justify-content:space-between;
+align-items:center;
+}
+
+.patient-info-header{
+display:flex;
+align-items:center;
+gap:12px;
+}
+
+.patient-avatar-report{
+width:48px;
+height:48px;
+border-radius:50%;
+background:linear-gradient(135deg,#3b82f6,#2563eb);
+color:white;
+display:flex;
+align-items:center;
+justify-content:center;
+font-weight:700;
+font-size:18px;
+flex-shrink:0;
+}
+
+.patient-info-header h3{
+font-size:16px;
+color:#1f2937;
+margin:0 0 4px 0;
+font-weight:600;
+}
+
+.patient-info-header p{
+font-size:13px;
+color:#6b7280;
+margin:0;
+}
+
+.status-badge{
+padding:6px 12px;
+border-radius:12px;
+font-size:11px;
+font-weight:700;
+text-transform:uppercase;
+letter-spacing:0.5px;
+}
+
+.status-badge.completed{
+background:#d1fae5;
+color:#065f46;
+}
+
+.status-badge.pending{
+background:#fef3c7;
+color:#92400e;
+}
+
+.report-card-body{
+padding:20px;
+}
+
+.report-detail{
+display:flex;
+gap:12px;
+padding:12px 0;
+border-bottom:1px solid #f9fafb;
+}
+
+.report-detail:last-of-type{
+border-bottom:none;
+}
+
+.report-detail svg{
+color:#6b7280;
+flex-shrink:0;
+margin-top:2px;
+}
+
+.report-detail label{
+font-size:12px;
+color:#6b7280;
+font-weight:500;
+display:block;
+margin-bottom:4px;
+}
+
+.report-detail p{
+font-size:14px;
+color:#1f2937;
+margin:0;
+line-height:1.4;
+}
+
+.ai-badge{
+display:flex;
+align-items:center;
+gap:6px;
+padding:8px 12px;
+background:#f0f9ff;
+border:1px solid #bfdbfe;
+border-radius:8px;
+font-size:12px;
+color:#1e40af;
+font-weight:600;
+margin-top:12px;
+}
+
+.report-card-footer{
+padding:16px 20px;
+border-top:1px solid #f3f4f6;
+display:flex;
+gap:8px;
+justify-content:flex-end;
+background:#f9fafb;
+}
+
+.btn-icon-action{
+width:40px;
+height:40px;
+border-radius:8px;
+border:1px solid #e5e7eb;
+background:white;
+display:flex;
+align-items:center;
+justify-content:center;
+cursor:pointer;
+transition:0.2s;
+color:#6b7280;
+}
+
+.btn-icon-action:hover{
+background:#2563eb;
+border-color:#2563eb;
+color:white;
+transform:translateY(-2px);
+box-shadow:0 4px 8px rgba(37,99,235,0.2);
+}
+
+.empty-state{
+text-align:center;
+padding:80px 20px;
+background:white;
+border-radius:12px;
+border:2px dashed #e5e7eb;
+}
+
+.empty-state svg{
+color:#d1d5db;
+margin-bottom:20px;
+}
+
+.empty-state h3{
+font-size:20px;
+color:#374151;
+margin:0 0 8px 0;
+}
+
+.empty-state p{
+font-size:14px;
+color:#9ca3af;
+margin:0;
+}
+
+@media (max-width:1200px){
+.reports-stats{
+grid-template-columns:repeat(2,1fr);
+}
+
+.reports-grid{
+grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+}
+}
+
+@media (max-width:768px){
+.reports-header{
+flex-direction:column;
+align-items:flex-start;
+gap:16px;
+}
+
+.btn-generate-report{
+width:100%;
+justify-content:center;
+}
+
+.reports-stats{
+grid-template-columns:1fr;
+}
+
+.reports-controls{
+flex-direction:column;
+}
+
+.filter-group{
+flex-direction:column;
+}
+
+.filter-group select{
+width:100%;
+}
+
+.reports-grid{
+grid-template-columns:1fr;
+}
+
+.report-card-footer{
+flex-wrap:wrap;
+justify-content:center;
+}
+}
+
+@media print{
+.sidebar,
+.navbar,
+.reports-header,
+.reports-stats,
+.reports-controls,
+.report-card-footer{
+display:none;
+}
+
+.report-card{
+page-break-inside:avoid;
+box-shadow:none;
+border:1px solid #000;
+}
+}

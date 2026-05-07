@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clear VocabOPD Cache</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        p {
+            color: #718096;
+            line-height: 1.6;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #2d3748;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        .status.success {
+            background: #c6f6d5;
+            color: #22543d;
+            display: block;
+        }
+        .status.info {
+            background: #bee3f8;
+            color: #2c5282;
+            display: block;
+        }
+        ul {
+            text-align: left;
+            color: #4a5568;
+            line-height: 1.8;
+        }
+        .icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">🧹</div>
+        <h1>Clear VocabOPD Cache</h1>
+        <p>If you're seeing old or dummy data in the application, use this tool to clear all cached data and start fresh.</p>
+        
+        <div style="margin: 30px 0;">
+            <button class="btn" onclick="clearAllData()">Clear All Cache & Data</button>
+            <button class="btn btn-secondary" onclick="window.location.href='/'">Go to Login</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div style="margin-top: 30px; text-align: left;">
+            <h3 style="color: #2d3748;">What will be cleared:</h3>
+            <ul>
+                <li>Local Storage (login tokens, preferences)</li>
+                <li>Session Storage (temporary data)</li>
+                <li>Cookies (session cookies)</li>
+                <li>Cache Storage (API responses)</li>
+            </ul>
+            <p style="font-size: 14px; color: #a0aec0; margin-top: 20px;">
+                Note: You will need to login again after clearing the cache.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        async function clearAllData() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = 'status info';
+            statusDiv.innerHTML = '🔄 Clearing cache and data...';
+
+            try {
+                // Clear localStorage
+                localStorage.clear();
+                console.log('✓ LocalStorage cleared');
+
+                // Clear sessionStorage
+                sessionStorage.clear();
+                console.log('✓ SessionStorage cleared');
+
+                // Clear cookies
+                document.cookie.split(";").forEach(function(c) { 
+                    document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+                });
+                console.log('✓ Cookies cleared');
+
+                // Clear cache storage
+                if ('caches' in window) {
+                    const cacheNames = await caches.keys();
+                    await Promise.all(cacheNames.map(name => caches.delete(name)));
+                    console.log('✓ Cache storage cleared');
+                }
+
+                // Clear IndexedDB
+                if ('indexedDB' in window) {
+                    const databases = await indexedDB.databases();
+                    databases.forEach(db => {
+                        indexedDB.deleteDatabase(db.name);
+                    });
+                    console.log('✓ IndexedDB cleared');
+                }
+
+                statusDiv.className = 'status success';
+                statusDiv.innerHTML = '✅ All cache and data cleared successfully!<br><br>Click "Go to Login" to start fresh.';
+
+            } catch (error) {
+                console.error('Error clearing cache:', error);
+                statusDiv.className = 'status success';
+                statusDiv.innerHTML = '✅ Cache cleared (some items may require manual browser cache clear).<br><br>For complete clearing, press Ctrl+Shift+Delete and clear browser cache.';
+            }
+        }
+    </script>
+</body>
+</html>

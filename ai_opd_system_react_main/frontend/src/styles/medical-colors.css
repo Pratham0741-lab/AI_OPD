@@ -1,0 +1,388 @@
+/* ============================= */
+/* PROFESSIONAL MEDICAL COLOR PALETTE */
+/* ============================= */
+
+:root {
+  /* Primary Medical Colors */
+  --medical-primary: #0066CC;        /* Professional Medical Blue */
+  --medical-primary-dark: #004C99;   /* Darker Blue */
+  --medical-primary-light: #E6F2FF;  /* Light Blue Background */
+  
+  /* Secondary Medical Colors */
+  --medical-teal: #008B8B;           /* Medical Teal */
+  --medical-teal-light: #E0F7F7;     /* Light Teal */
+  
+  /* Success/Health Colors */
+  --medical-success: #00A86B;        /* Medical Green */
+  --medical-success-light: #E6F9F0;  /* Light Green */
+  
+  /* Warning/Attention Colors */
+  --medical-warning: #FF8C00;        /* Medical Orange */
+  --medical-warning-light: #FFF4E6;  /* Light Orange */
+  
+  /* Error/Critical Colors */
+  --medical-error: #DC143C;          /* Medical Red */
+  --medical-error-light: #FFE6EB;    /* Light Red */
+  
+  /* Neutral Medical Colors */
+  --medical-gray-50: #F8FAFB;        /* Very Light Gray */
+  --medical-gray-100: #F1F5F9;       /* Light Gray */
+  --medical-gray-200: #E2E8F0;       /* Border Gray */
+  --medical-gray-300: #CBD5E1;       /* Divider Gray */
+  --medical-gray-400: #94A3B8;       /* Placeholder Gray */
+  --medical-gray-500: #64748B;       /* Text Gray */
+  --medical-gray-600: #475569;       /* Dark Text */
+  --medical-gray-700: #334155;       /* Heading Gray */
+  --medical-gray-800: #1E293B;       /* Very Dark */
+  --medical-gray-900: #0F172A;       /* Almost Black */
+  
+  /* Clinical White */
+  --medical-white: #FFFFFF;
+  
+  /* Accent Colors */
+  --medical-purple: #6B46C1;         /* Medical Purple */
+  --medical-purple-light: #F3EFFF;   /* Light Purple */
+}
+
+/* Apply Medical Colors to Global Elements */
+body {
+  background: var(--medical-gray-50);
+  color: var(--medical-gray-700);
+}
+
+/* Sidebar Medical Colors */
+.sidebar {
+  background: linear-gradient(180deg, var(--medical-primary-dark) 0%, var(--medical-primary) 100%);
+}
+
+.sidebar-menu a:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.sidebar-menu a.active {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Navbar Medical Colors */
+.navbar {
+  background: var(--medical-white);
+  border-bottom: 1px solid var(--medical-gray-200);
+}
+
+.page-title {
+  color: var(--medical-primary-dark);
+}
+
+/* Button Medical Colors */
+.btn-primary,
+.login-btn,
+.start-btn,
+.save-btn {
+  background: linear-gradient(135deg, var(--medical-primary) 0%, var(--medical-teal) 100%);
+}
+
+.btn-primary:hover,
+.login-btn:hover,
+.start-btn:hover,
+.save-btn:hover {
+  background: linear-gradient(135deg, var(--medical-primary-dark) 0%, var(--medical-teal) 100%);
+}
+
+.btn-success,
+.save-profile-btn {
+  background: var(--medical-success);
+}
+
+.btn-success:hover,
+.save-profile-btn:hover {
+  background: #008B5A;
+}
+
+.btn-secondary,
+.cancel-profile-btn {
+  background: var(--medical-gray-500);
+}
+
+.btn-secondary:hover,
+.cancel-profile-btn:hover {
+  background: var(--medical-gray-600);
+}
+
+/* Card Medical Colors */
+.stat-card,
+.dashboard-card,
+.profile-card,
+.consultation-card {
+  background: var(--medical-white);
+  border: 1px solid var(--medical-gray-200);
+}
+
+.stat-card:hover,
+.dashboard-card:hover {
+  border-color: var(--medical-primary);
+}
+
+/* Input Medical Colors */
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--medical-primary);
+  background: var(--medical-primary-light);
+}
+
+/* Status Badge Medical Colors */
+.patient-status.completed,
+.status-badge.completed {
+  background: var(--medical-success-light);
+  color: var(--medical-success);
+}
+
+.patient-status.in-progress {
+  background: var(--medical-primary-light);
+  color: var(--medical-primary);
+}
+
+.patient-status.scheduled,
+.status-badge.pending {
+  background: var(--medical-warning-light);
+  color: var(--medical-warning);
+}
+
+/* Notification Medical Colors */
+.notification-badge {
+  background: var(--medical-error);
+}
+
+.notification-dropdown {
+  background: var(--medical-white);
+  border: 1px solid var(--medical-gray-200);
+}
+
+.notification-item.unread {
+  background: var(--medical-primary-light);
+}
+
+/* Profile Medical Colors */
+.profile-header-card {
+  background: linear-gradient(135deg, var(--medical-primary-dark) 0%, var(--medical-teal) 100%);
+}
+
+.profile-picture-large,
+.profile-picture {
+  border: 4px solid var(--medical-white);
+}
+
+.change-picture-btn-large,
+.change-picture-btn {
+  background: var(--medical-white);
+  color: var(--medical-primary);
+  border: 3px solid var(--medical-primary);
+}
+
+.remove-picture-btn-large {
+  background: var(--medical-white);
+  color: var(--medical-error);
+  border: 3px solid var(--medical-error);
+}
+
+.remove-picture-btn-large:hover {
+  background: #fef2f2;
+}
+
+/* Dashboard Medical Colors */
+.welcome-section {
+  background: linear-gradient(135deg, var(--medical-primary-dark) 0%, var(--medical-teal) 100%);
+}
+
+.start-consultation-btn {
+  background: var(--medical-white);
+  color: var(--medical-primary-dark);
+}
+
+.start-consultation-btn:hover {
+  background: var(--medical-gray-50);
+}
+
+/* Record Consultation Medical Colors */
+.record-btn-large {
+  background: linear-gradient(135deg, var(--medical-success) 0%, var(--medical-teal) 100%);
+}
+
+.stop-record-btn-large {
+  background: linear-gradient(135deg, var(--medical-error) 0%, #C41230 100%);
+}
+
+.language-tab.active {
+  background: var(--medical-primary);
+  border-color: var(--medical-primary);
+}
+
+.language-tab:hover {
+  border-color: var(--medical-primary);
+  background: var(--medical-primary-light);
+}
+
+/* AI Summary Medical Colors */
+.ai-summary-panel {
+  background: linear-gradient(135deg, var(--medical-primary-light) 0%, var(--medical-teal-light) 100%);
+  border: 2px solid var(--medical-primary);
+}
+
+.ai-badge,
+.ai-badge-modal {
+  background: var(--medical-purple-light);
+  border: 1px solid var(--medical-purple);
+  color: var(--medical-purple);
+}
+
+/* Reports Medical Colors */
+.btn-generate-report {
+  background: linear-gradient(135deg, var(--medical-primary) 0%, var(--medical-teal) 100%);
+}
+
+.report-card:hover {
+  border-color: var(--medical-primary);
+}
+
+.patient-avatar-report,
+.patient-avatar {
+  background: linear-gradient(135deg, var(--medical-primary) 0%, var(--medical-teal) 100%);
+}
+
+.btn-icon-action:hover {
+  background: var(--medical-primary);
+  border-color: var(--medical-primary);
+}
+
+/* Modal Medical Colors */
+.modal-header {
+  background: var(--medical-gray-50);
+  border-bottom: 1px solid var(--medical-gray-200);
+}
+
+.modal-footer {
+  background: var(--medical-gray-50);
+  border-top: 1px solid var(--medical-gray-200);
+}
+
+.close-btn:hover {
+  color: var(--medical-error);
+}
+
+/* Toggle Switch Medical Colors */
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--medical-success);
+}
+
+/* Progress Medical Colors */
+.progress-step.active .step-number {
+  background: var(--medical-primary);
+}
+
+.progress-step.completed .step-number {
+  background: var(--medical-success);
+}
+
+/* Table Medical Colors */
+.history-table th,
+.reports-table th {
+  background: var(--medical-primary-dark);
+  color: var(--medical-white);
+}
+
+.history-table tbody tr:hover,
+.reports-table tbody tr:hover {
+  background: var(--medical-primary-light);
+}
+
+/* Link Medical Colors */
+a,
+.auth-link a {
+  color: var(--medical-primary);
+}
+
+a:hover,
+.auth-link a:hover {
+  color: var(--medical-primary-dark);
+}
+
+/* Error/Success Box Medical Colors */
+.error-box {
+  background: var(--medical-error-light);
+  color: var(--medical-error);
+  border: 1px solid var(--medical-error);
+}
+
+.success-box {
+  background: var(--medical-success-light);
+  color: var(--medical-success);
+  border: 1px solid var(--medical-success);
+}
+
+/* Processing Indicator Medical Colors */
+.processing-indicator {
+  background: var(--medical-primary-light);
+  border: 2px dashed var(--medical-primary);
+}
+
+.processing-spinner {
+  border-top-color: var(--medical-primary);
+}
+
+/* Transcription Medical Colors */
+.transcription-textarea-main:focus {
+  border-color: var(--medical-primary);
+  box-shadow: 0 0 0 3px var(--medical-primary-light);
+}
+
+.btn-generate-summary {
+  background: var(--medical-purple);
+}
+
+.btn-generate-summary:hover {
+  background: #5A3BA8;
+}
+
+/* Report Viewer Medical Colors */
+.report-section-header svg {
+  color: var(--medical-primary);
+}
+
+.report-section-header h3 {
+  color: var(--medical-primary-dark);
+}
+
+.diagnosis-text {
+  color: var(--medical-primary-dark);
+}
+
+.prescription-text {
+  color: var(--medical-success);
+}
+
+.advice-text {
+  background: var(--medical-gray-50);
+  border-left: 3px solid var(--medical-primary);
+}
+
+/* Appointment Medical Colors */
+.appointment-item {
+  border-left: 3px solid var(--medical-primary);
+  background: var(--medical-gray-50);
+}
+
+.appointment-time {
+  color: var(--medical-primary);
+}
+
+/* Settings Medical Colors */
+.setting-item:hover {
+  background: var(--medical-gray-100);
+}
+
+/* Print Styles */
+@media print {
+  body {
+    background: white;
+  }
+}

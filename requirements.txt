@@ -1,0 +1,23 @@
+# FastAPI & Server
+fastapi
+uvicorn
+python-multipart
+
+# PyTorch with CUDA 12.1 support
+torch --index-url https://download.pytorch.org/whl/cu121
+torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# HuggingFace Transformers
+transformers
+
+# ONNX Runtime (GPU)
+onnx==1.20.1
+onnxruntime-gpu==1.20.1
+
+# Audio I/O
+soundfile
+gTTS
+
+# Twilio (phone-based health-check calls)
+twilio
+python-dotenv
