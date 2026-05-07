@@ -3,21 +3,15 @@ fastapi
 uvicorn
 python-multipart
 
-# PyTorch with CUDA 12.1 support
-torch --index-url https://download.pytorch.org/whl/cu121
-torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Database
+sqlalchemy
 
-# HuggingFace Transformers
-transformers
-
-# ONNX Runtime (GPU)
-onnx==1.20.1
-onnxruntime-gpu==1.20.1
-
-# Audio I/O
-soundfile
+# Audio I/O (TTS for Twilio calls)
 gTTS
 
 # Twilio (phone-based health-check calls)
 twilio
 python-dotenv
+
+# Scheduler (for recurring calls)
+apscheduler

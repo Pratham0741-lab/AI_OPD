@@ -113,21 +113,6 @@ export const transcribeAudio = async (audioBlob, language = 'english') => {
   return response.json();
 };
 
-// GPU ASR Transcription (via Python Voice Assistant backend)
-export const transcribeWithGPU = async (audioBlob, language = 'auto') => {
-  const VA_BASE = process.env.REACT_APP_VA_URL || "http://localhost:8000";
-  const formData = new FormData();
-  formData.append('audio_file', audioBlob, 'recording.webm');
-  formData.append('language', language);
-  
-  const response = await fetch(`${VA_BASE}/api/va/transcribe-consultation`, {
-    method: "POST",
-    body: formData
-  });
-  
-  return response.json();
-};
-
 // Translation API
 export const translateText = async (text, targetLanguage) => {
   const response = await fetch(`${API_BASE}/api/translate`, {

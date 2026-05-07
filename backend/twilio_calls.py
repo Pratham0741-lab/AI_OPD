@@ -1,12 +1,12 @@
 """
-Twilio Phone Call Integration for Voice Assistant
+Twilio Phone Call Integration for Voice Assistant (GPU-Free)
 
 Handles the complete lifecycle of automated medication adherence phone calls:
 1. Initiate outbound call via Twilio REST API
-2. Play health-check question via TwiML <Play>
-3. Record patient's spoken answer via TwiML <Record>
-4. Process recording through the GPU ASR pipeline (Whisper LID + IndicConformer)
-5. Generate multilingual TTS confirmation
+2. Play health-check question via TwiML <Say> (English)
+3. Capture patient's spoken answer via TwiML <Gather speech> (Twilio's built-in ASR)
+4. Classify intent using keyword matching (CPU only)
+5. Generate multilingual TTS confirmation via gTTS
 6. Play confirmation to patient and hang up
 7. Log everything to the database
 """
@@ -16,8 +16,6 @@ import uuid
 import time
 import random
 import logging
-import tempfile
-import subprocess
 import datetime
 
 from fastapi import APIRouter, Request, HTTPException, Depends, BackgroundTasks
@@ -32,7 +30,6 @@ from backend.constants import (
     SUPPORTED_LANG_CODES, TWILIO_SPEECH_LANG,
     GREETING_TEXT, ANSWER_PROMPT_TEXT, HEALTH_QUESTIONS_ML,
 )
-from backend import shared_state
 import backend.models as models
 
 logger = logging.getLogger("twilio-calls")
@@ -54,241 +51,25 @@ def get_db():
         db.close()
 
 
+
 # ──────────────────────────────────────────────────────────────
-# Audio Processing Helpers
+# NOTE: GPU ASR functions (preprocess_recording, run_asr_pipeline)
+# were removed. Twilio's built-in <Gather speech> handles all
+# speech recognition — no GPU, torch, or whisper needed.
 # ──────────────────────────────────────────────────────────────
 
-def preprocess_recording(audio_bytes: bytes):
-    """
-    Convert audio bytes (WAV from Twilio or any format) to a mono 16kHz float32 tensor.
-    Applies telephony-grade audio enhancement:
-      - Resample to 16kHz mono
-      - Highpass filter at 80Hz to remove phone line hum
-      - Lowpass filter at 7500Hz to remove high-freq noise
-      - Volume normalization
-      - Noise reduction (anlmdn)
-    """
-    import torch
-    import torchaudio
-
-    tmp_in = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp_out = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    try:
-        tmp_in.write(audio_bytes)
-        tmp_in.flush()
-        tmp_in.close()
-        tmp_out.close()
-
-        # Enhanced ffmpeg pipeline for telephony audio
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", tmp_in.name,
-            "-ac", "1",
-            "-ar", "16000",
-            "-af", (
-                "highpass=f=80,"           # Remove low-freq hum
-                "lowpass=f=7500,"           # Remove high-freq noise
-                "anlmdn=s=7:p=0.002:r=0.002,"  # Noise reduction
-                "loudnorm=I=-16:TP=-1.5:LRA=11"  # Volume normalization
-            ),
-            "-f", "wav",
-            tmp_out.name,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            # Fallback to basic conversion if advanced filters fail
-            logger.warning(f"Enhanced preprocessing failed, falling back to basic: {result.stderr[:200]}")
-            cmd_basic = [
-                "ffmpeg", "-y",
-                "-i", tmp_in.name,
-                "-ac", "1",
-                "-ar", "16000",
-                "-f", "wav",
-                tmp_out.name,
-            ]
-            subprocess.run(cmd_basic, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        waveform, sr = torchaudio.load(tmp_out.name)
-        return waveform.squeeze(0)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg conversion failed: {e}")
-        raise RuntimeError("FFmpeg could not convert the audio.")
-    finally:
-        for f in [tmp_in.name, tmp_out.name]:
-            if os.path.exists(f):
-                os.unlink(f)
-
-
-def run_asr_pipeline(audio_bytes: bytes) -> dict:
-    """
-    Run the full triple-path ASR + intent classification pipeline.
-    Uses the GPU models from shared_state. Returns a dict with:
-      transcript, intent, detected_language, confidence
-    
-    Paths:
-      A) Whisper → English transcription (beam search)
-      B) Whisper → Detected-language transcription (beam search)
-      C) Conformer → Indic transcription
-    """
-    import torch
-
-    model = shared_state.model
-    whisper_processor = shared_state.whisper_processor
-    whisper_model = shared_state.whisper_model
-    device = shared_state.device
-
-    if model is None or whisper_model is None:
-        raise RuntimeError("ASR models not loaded")
-
-    # 1. Preprocess audio
-    waveform = preprocess_recording(audio_bytes)
-    audio_tensor = waveform.unsqueeze(0)
-
-    # 2. Whisper LID (Language Identification)
-    whisper_audio = audio_tensor.to(device, dtype=torch.float16)
-    input_features = whisper_processor(
-        whisper_audio.cpu().numpy(), sampling_rate=16000, return_tensors="pt"
-    ).input_features.to(device, dtype=torch.float16)
-
-    decoder_input_ids = torch.tensor([[whisper_model.config.decoder_start_token_id]]).to(device)
-    with torch.no_grad():
-        logits = whisper_model(input_features, decoder_input_ids=decoder_input_ids).logits[:, 0, :]
-
-    token_ids, valid_tokens = [], []
-    for token in WHISPER_LANG_TOKENS:
-        tid = whisper_processor.tokenizer.convert_tokens_to_ids(token)
-        if tid is not None:
-            token_ids.append(tid)
-            valid_tokens.append(token)
-
-    target_logits = logits[0, token_ids]
-    best_idx = torch.argmax(target_logits).item()
-    raw_lang = valid_tokens[best_idx].replace("<|", "").replace("|>", "")
-    lid_lang = raw_lang if raw_lang in SUPPORTED_LANG_CODES else "hi"
-
-    logger.info(f"📞 Twilio ASR — Whisper LID: {raw_lang} → {lid_lang}")
-
-    # 3. Triple-path Transcription (all with beam search for better accuracy)
-
-    # Path A: Whisper English transcription
-    whisper_en_transcript = ""
-    try:
-        forced_decoder_ids = whisper_processor.get_decoder_prompt_ids(language="english", task="transcribe")
-        with torch.no_grad():
-            predicted_ids = whisper_model.generate(
-                input_features,
-                forced_decoder_ids=forced_decoder_ids,
-                num_beams=5,
-                temperature=0.0,
-                no_repeat_ngram_size=3,
-            )
-        whisper_en_transcript = whisper_processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].lower().strip()
-    except Exception as e:
-        logger.error(f"Whisper EN transcription failed: {e}")
-
-    # Path B: Whisper detected-language transcription (if not English)
-    whisper_indic_transcript = ""
-    if lid_lang != "en":
-        # Map our codes to Whisper language names
-        LANG_TO_WHISPER_NAME = {
-            "hi": "hindi", "kn": "kannada", "mr": "marathi", "ta": "tamil",
-            "te": "telugu", "bn": "bengali", "ml": "malayalam", "gu": "gujarati",
-            "pa": "punjabi", "or": "odia",
-        }
-        whisper_lang_name = LANG_TO_WHISPER_NAME.get(lid_lang, "hindi")
-        try:
-            forced_decoder_ids = whisper_processor.get_decoder_prompt_ids(language=whisper_lang_name, task="transcribe")
-            with torch.no_grad():
-                predicted_ids = whisper_model.generate(
-                    input_features,
-                    forced_decoder_ids=forced_decoder_ids,
-                    num_beams=5,
-                    temperature=0.0,
-                    no_repeat_ngram_size=3,
-                )
-            whisper_indic_transcript = whisper_processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].lower().strip()
-        except Exception as e:
-            logger.error(f"Whisper {whisper_lang_name} transcription failed: {e}")
-
-    # Path C: Conformer Indic transcription
-    conformer_lang = lid_lang if lid_lang != "en" else "hi"
-    conformer_transcript = ""
-    try:
-        transcription = model(audio_tensor.to(device), conformer_lang, "rnnt")
-        conformer_transcript = str(transcription).lower().strip()
-    except Exception as e:
-        logger.error(f"Conformer transcription failed for {conformer_lang}: {e}")
-
-    logger.info(f"📞 Whisper EN: '{whisper_en_transcript}'")
-    logger.info(f"📞 Whisper {lid_lang}: '{whisper_indic_transcript}'")
-    logger.info(f"📞 Conformer {conformer_lang}: '{conformer_transcript}'")
-
-    # 4. Aggressive Intent Classification — check ALL transcripts against ALL dictionaries
-
-    # Collect all transcripts to search
-    all_transcripts = [
-        ("whisper_en", whisper_en_transcript),
-        ("whisper_indic", whisper_indic_transcript),
-        ("conformer", conformer_transcript),
-    ]
-
-    intent = "Unclear"
-    final_lang = lid_lang
-    clean_transcript = ""
-
-    # Set the primary transcript for display
-    if lid_lang == "en":
-        clean_transcript = whisper_en_transcript
-    else:
-        clean_transcript = whisper_indic_transcript or conformer_transcript or whisper_en_transcript
-
-    # Search every transcript against every language dictionary
-    # Priority: "No" before "Yes" (safety — if both appear, assume No)
-    for _label, _transcript in all_transcripts:
-        if not _transcript or intent != "Unclear":
-            continue
-        for lc, kw in INTENT_KEYWORDS.items():
-            if any(w in _transcript for w in kw.get("no", [])):
-                intent = "No"
-                final_lang = lc if lc != "en" else lid_lang
-                clean_transcript = _transcript
-                break
-        if intent != "Unclear":
-            break
-
-    if intent == "Unclear":
-        for _label, _transcript in all_transcripts:
-            if not _transcript or intent != "Unclear":
-                continue
-            for lc, kw in INTENT_KEYWORDS.items():
-                if any(w in _transcript for w in kw.get("yes", [])):
-                    intent = "Yes"
-                    final_lang = lc if lc != "en" else lid_lang
-                    clean_transcript = _transcript
-                    break
-            if intent != "Unclear":
-                break
-
-    # If still unclear, use the best available transcript
-    if not clean_transcript:
-        clean_transcript = whisper_en_transcript or conformer_transcript or whisper_indic_transcript or ""
-
-    logger.info(f"📞 Intent: {intent} | Language: {final_lang} | Transcript: '{clean_transcript}'")
-
-    return {
-        "transcript": clean_transcript,
-        "intent": intent,
-        "detected_language": final_lang,
-        "confidence": 1.0 if intent != "Unclear" else 0.0,
-    }
 
 
 def generate_tts_file(text: str, lang: str, filename: str) -> str:
     """Generate a TTS MP3 file and return its path."""
+    import tempfile
     from gtts import gTTS
 
     tts_lang = GTTS_LANG_MAP.get(lang, "en")
-    filepath = os.path.join(TEMP_AUDIO_DIR, filename)
+    # Use a dedicated temp directory for audio files
+    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    filepath = os.path.join(audio_dir, filename)
 
     try:
         tts = gTTS(text=text, lang=tts_lang)
@@ -304,9 +85,12 @@ def generate_tts_file(text: str, lang: str, filename: str) -> str:
 
 def cleanup_old_audio_files():
     """Delete temp audio files older than 1 hour."""
+    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
+    if not os.path.exists(audio_dir):
+        return
     cutoff = time.time() - 3600
-    for filename in os.listdir(TEMP_AUDIO_DIR):
-        filepath = os.path.join(TEMP_AUDIO_DIR, filename)
+    for filename in os.listdir(audio_dir):
+        filepath = os.path.join(audio_dir, filename)
         if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
             try:
                 os.remove(filepath)
@@ -336,12 +120,27 @@ async def twilio_config_status():
     })
 
 
+@router.get("/serve-audio/{filename}")
+async def serve_audio(filename: str):
+    """Serve a generated TTS audio file to Twilio's <Play> verb."""
+    from fastapi.responses import FileResponse
+
+    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
+    filepath = os.path.join(audio_dir, filename)
+
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    return FileResponse(filepath, media_type="audio/mpeg")
+
+
 @router.post("/initiate-call")
 async def initiate_call(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Initiate an outbound phone call to a patient for medication adherence check.
-    Question is ALWAYS asked in English. Patient responds in their language.
-    System responds back in the patient's language. NO GPU required.
+    Question is asked in the PATIENT'S SELECTED LANGUAGE using gTTS.
+    Patient responds in their language. System responds back in that language.
+    NO GPU required.
     """
     config = get_twilio_config()
     if not config:
@@ -352,7 +151,7 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
     patient_id = data.get("patient_id")
     patient_name = data.get("patient_name", "Patient")
     question_id = data.get("question_id", 0)
-    language = data.get("language", "en")  # patient's expected language for ASR + response
+    language = data.get("language", "en")  # patient's preferred language
 
     if language not in SUPPORTED_LANG_CODES:
         language = "en"
@@ -360,9 +159,10 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
     if not phone_number:
         raise HTTPException(status_code=400, detail="Phone number is required.")
 
-    # Get English question text (question always in English)
+    # Get question text in patient's language
     q_map = HEALTH_QUESTIONS_ML.get(question_id % len(HEALTH_QUESTIONS_ML), HEALTH_QUESTIONS_ML[0])
-    question_text_en = q_map["en"]
+    question_text = q_map.get(language, q_map["en"])
+    question_text_en = q_map["en"]  # Keep English for logging/display
 
     # Create call log entry
     patient_id_int = int(patient_id) if patient_id and str(patient_id).isdigit() else None
@@ -376,6 +176,19 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
     db.add(call_log)
     db.commit()
     db.refresh(call_log)
+
+    # Pre-generate TTS audio files in the patient's language
+    call_id = call_log.id
+    greeting_text = GREETING_TEXT.get(language, GREETING_TEXT["en"])
+    prompt_text = ANSWER_PROMPT_TEXT.get(language, ANSWER_PROMPT_TEXT["en"])
+
+    try:
+        generate_tts_file(greeting_text, language, f"greeting_{call_id}.mp3")
+        generate_tts_file(question_text, language, f"question_{call_id}.mp3")
+        generate_tts_file(prompt_text, language, f"prompt_{call_id}.mp3")
+        logger.info(f"📞 TTS audio generated in '{language}' for call {call_id}")
+    except Exception as e:
+        logger.error(f"📞 TTS pre-generation failed: {e}")
 
     # Create Twilio outbound call
     try:
@@ -397,7 +210,7 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
         call_log.status = "initiated"
         db.commit()
 
-        logger.info(f"📞 Call initiated: SID={call.sid}, to={phone_number}, lang={language}, question='{question_text_en}'")
+        logger.info(f"📞 Call initiated: SID={call.sid}, to={phone_number}, lang={language}, question='{question_text}'")
 
         background_tasks.add_task(cleanup_old_audio_files)
 
@@ -422,8 +235,9 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
 async def voice_webhook(call_log_id: int, lang: str = "en", db: Session = Depends(get_db)):
     """
     TwiML webhook — called by Twilio when the patient picks up.
-    Question is ALWAYS in English. Listens for patient's response in their language.
-    Response is played back in the patient's language. NO GPU required.
+    Question is asked in the PATIENT'S SELECTED LANGUAGE via gTTS <Play>.
+    Listens for patient's response in their language via <Gather speech>.
+    NO GPU required.
     """
     from twilio.twiml.voice_response import VoiceResponse, Gather
 
@@ -441,34 +255,49 @@ async def voice_webhook(call_log_id: int, lang: str = "en", db: Session = Depend
     if lang not in SUPPORTED_LANG_CODES:
         lang = "en"
 
-    # --- Question is ALWAYS in English ---
-    response.say(
-        "Hello, this is an automated health check call from your doctor's office.",
-        voice="alice",
-    )
-    response.pause(length=1)
-    response.say(call_log.question_text, voice="alice")
-    response.say("Please answer after the beep.", voice="alice")
+    # --- Play greeting, question, and prompt in patient's language ---
+    audio_base = f"{base_url}/api/twilio/serve-audio"
 
-    # Listen for patient's response in their language using Twilio's ASR
+    # Play greeting in patient's language
+    response.play(f"{audio_base}/greeting_{call_log_id}.mp3")
+    response.pause(length=1)
+
+    # Play the health question in patient's language
+    response.play(f"{audio_base}/question_{call_log_id}.mp3")
+    response.pause(length=1)
+
+    # Play the answer prompt in patient's language
+    response.play(f"{audio_base}/prompt_{call_log_id}.mp3")
+
+    # Listen for patient's response using Twilio's ASR
+    # Use en-IN with enhanced model for best cross-language recognition
     twilio_lang = TWILIO_SPEECH_LANG.get(lang, "en-IN")
+    
     gather = Gather(
         input="speech",
-        language=twilio_lang,
+        language="en-IN",
         action=f"{base_url}/api/twilio/process-speech?call_log_id={call_log_id}&lang={lang}",
-        timeout=10,
-        speech_timeout=5,
+        timeout=15,
+        speech_timeout=3,
+        hints="yes, no, yeah, nope, okay, done, took it, i did, i have, not yet, forgot, haan, ha, ji, nahi, na, nahin, le liya, nahi liya, kha liya, nahi khaya, haudu, illa, ho, nako",
+        enhanced=True,
     )
     response.append(gather)
 
-    # Fallback if no speech detected
-    response.say("We did not receive your response. Goodbye.", voice="alice")
+    # Fallback if no speech detected at all
+    fallback_text = RESPONSE_UNCLEAR.get(lang, RESPONSE_UNCLEAR["en"])
+    fallback_file = f"fallback_{call_log_id}.mp3"
+    try:
+        generate_tts_file(fallback_text, lang, fallback_file)
+        response.play(f"{audio_base}/{fallback_file}")
+    except Exception:
+        response.say("We did not receive your response. Goodbye.", voice="alice")
     response.hangup()
 
     call_log.status = "in-progress"
     db.commit()
 
-    logger.info(f"📞 Voice webhook served for call_log_id={call_log_id}, lang={lang}, twilio_speech={twilio_lang}")
+    logger.info(f"📞 Voice webhook served for call_log_id={call_log_id}, lang={lang}, primary_speech=en-IN, fallback_speech={twilio_lang}")
     return Response(content=str(response), media_type="application/xml")
 
 
@@ -505,36 +334,133 @@ async def process_speech(
     call_log.transcript = speech_result
     call_log.detected_language = lang
 
-    # Run keyword-based intent classification (CPU only)
+    # Run robust intent classification (CPU only)
+    # Twilio telephony transcripts are often noisy — we use multi-strategy matching:
+    # 1. Fuzzy romanized matching (detects language from keywords)
+    # 2. Native script keyword dictionaries
+    # 3. Short response prefix matching
+    # Also tracks which language the patient ACTUALLY spoke in.
+
     intent = "Unclear"
-    for lc, kw in INTENT_KEYWORDS.items():
-        if any(w in speech_result for w in kw.get("no", [])):
-            intent = "No"
+    detected_response_lang = lang  # Default to selected language
+    transcript = speech_result.strip().lower()
+    
+    # Split transcript into individual words for word-level matching
+    words = transcript.split()
+
+    # --- Strategy 1: Fuzzy romanized patterns mapped to their language ---
+    YES_FUZZY_LANG = {
+        "en": ["yes", "yeah", "yep", "yup", "yah", "yea", "ok", "okay", "sure", "done", "right", "correct", "i did", "i have", "i took", "took it", "had it", "taken"],
+        "hi": ["haan", "haa", "han", "hn", "ji", "le liya", "kha liya", "liya", "khaya", "khai"],
+        "kn": ["haudu", "howdu", "agide", "hoo"],
+        "mr": ["ho", "hoye", "ghetale", "gheli"],
+        "ta": ["aam", "aama", "eduthen", "saptiten"],
+        "te": ["avunu", "avunandi", "veskunna"],
+        "bn": ["hyaa", "niyechi", "kheyechi"],
+        "ml": ["athe", "kazhichu", "eduthu"],
+        "gu": ["haa", "lidhi", "khadhi"],
+        "pa": ["haanji", "lai", "kha lai"],
+    }
+    NO_FUZZY_LANG = {
+        "en": ["no", "nope", "nah", "nay", "not", "not yet", "haven't", "didn't", "forgot", "missed", "skip"],
+        "hi": ["nahi", "nahin", "nai", "nahi liya", "nahi khaya", "nahi li", "bhool gaya"],
+        "kn": ["illa", "beda", "agilla"],
+        "mr": ["nahi", "nako", "nay", "ghetale nahi"],
+        "ta": ["illai", "illa", "podala", "edukala"],
+        "te": ["ledu", "kaadu", "vesukoledu"],
+        "bn": ["na", "niini", "khaini"],
+        "ml": ["illa", "kazhichilla"],
+        "gu": ["na", "nathi", "lidhi nathi"],
+        "pa": ["nahi", "nai lyi"],
+    }
+    
+    # Check NO first (to avoid false positives from "na" in longer words)
+    for fuzzy_lang, fuzzy_words in NO_FUZZY_LANG.items():
+        for w in words:
+            if w in fuzzy_words:
+                intent = "No"
+                detected_response_lang = fuzzy_lang
+                break
+        if intent != "Unclear":
             break
     if intent == "Unclear":
-        for lc, kw in INTENT_KEYWORDS.items():
-            if any(w in speech_result for w in kw.get("yes", [])):
-                intent = "Yes"
+        for fuzzy_lang, fuzzy_words in NO_FUZZY_LANG.items():
+            for phrase in fuzzy_words:
+                if " " in phrase and phrase in transcript:
+                    intent = "No"
+                    detected_response_lang = fuzzy_lang
+                    break
+            if intent != "Unclear":
                 break
 
-    call_log.intent = intent
+    # Check YES
+    if intent == "Unclear":
+        for fuzzy_lang, fuzzy_words in YES_FUZZY_LANG.items():
+            for w in words:
+                if w in fuzzy_words:
+                    intent = "Yes"
+                    detected_response_lang = fuzzy_lang
+                    break
+            if intent != "Unclear":
+                break
+    if intent == "Unclear":
+        for fuzzy_lang, fuzzy_words in YES_FUZZY_LANG.items():
+            for phrase in fuzzy_words:
+                if " " in phrase and phrase in transcript:
+                    intent = "Yes"
+                    detected_response_lang = fuzzy_lang
+                    break
+            if intent != "Unclear":
+                break
 
-    # Generate multilingual confirmation response
+    # --- Strategy 2: Check all native-script keyword dictionaries ---
+    if intent == "Unclear":
+        for lc, kw in INTENT_KEYWORDS.items():
+            if any(w in transcript for w in kw.get("no", [])):
+                intent = "No"
+                detected_response_lang = lc
+                break
+    if intent == "Unclear":
+        for lc, kw in INTENT_KEYWORDS.items():
+            if any(w in transcript for w in kw.get("yes", [])):
+                intent = "Yes"
+                detected_response_lang = lc
+                break
+    
+    # --- Strategy 3: Short response prefix matching ---
+    if intent == "Unclear" and len(words) <= 2:
+        for w in words:
+            if w.startswith(("ye", "ya", "ha", "ji", "ok", "su", "do", "ri")):
+                intent = "Yes"
+                detected_response_lang = "en"  # Assume English-like
+                break
+            elif w.startswith(("no", "na", "ni", "ne")):
+                intent = "No"
+                detected_response_lang = "en"
+                break
+
+    logger.info(f"📞 Intent detection: transcript='{speech_result}', intent={intent}, spoken_lang={detected_response_lang}, selected_lang={lang}, confidence={confidence}")
+
+    call_log.intent = intent
+    call_log.detected_language = detected_response_lang
+
+    # Generate confirmation response in the LANGUAGE THE PATIENT ACTUALLY SPOKE
+    response_lang = detected_response_lang
     if intent == "Yes":
-        confirmation = random.choice(RESPONSE_YES.get(lang, RESPONSE_YES["en"]))
+        confirmation = random.choice(RESPONSE_YES.get(response_lang, RESPONSE_YES["en"]))
     elif intent == "No":
-        confirmation = random.choice(RESPONSE_NO.get(lang, RESPONSE_NO["en"]))
+        confirmation = random.choice(RESPONSE_NO.get(response_lang, RESPONSE_NO["en"]))
     else:
-        confirmation = RESPONSE_UNCLEAR.get(lang, RESPONSE_UNCLEAR["en"])
+        confirmation = RESPONSE_UNCLEAR.get(lang, RESPONSE_UNCLEAR["en"])  # Fallback to selected lang
 
     call_log.response_text = confirmation
     call_log.status = "completed"
     call_log.duration = 0
     db.commit()
 
-    # Generate and play TTS confirmation in the patient's language
+    # Generate and play TTS confirmation in the detected spoken language
     conf_file = f"conf_{uuid.uuid4().hex[:8]}.mp3"
-    generate_tts_file(confirmation, lang, conf_file)
+    generate_tts_file(confirmation, response_lang, conf_file)
     response.play(f"{base_url}/api/twilio/serve-audio/{conf_file}")
     response.pause(length=1)
     response.hangup()
@@ -574,101 +500,8 @@ async def process_speech(
     return Response(content=str(response), media_type="application/xml")
 
 
-def _process_recording_background(call_log_id: int, recording_url: str, config: dict):
-    """Background task: downloads the recording, runs ASR, updates the database."""
-    import requests as http_requests
-    from backend.database import SessionLocal
 
-    db = SessionLocal()
-    try:
-        call_log = db.query(models.TwilioCallLog).filter(models.TwilioCallLog.id == call_log_id).first()
-        if not call_log:
-            return
 
-        # Download recording
-        wav_url = recording_url + ".wav"
-        audio_bytes = None
-        for attempt in range(5):
-            try:
-                r = http_requests.get(wav_url, auth=(config["account_sid"], config["auth_token"]), timeout=15)
-                if r.status_code == 200 and len(r.content) > 100:
-                    audio_bytes = r.content
-                    logger.info(f"📞 BG: Recording downloaded: {len(r.content)} bytes (attempt {attempt + 1})")
-                    break
-            except Exception as e:
-                logger.warning(f"📞 BG: Download attempt {attempt + 1} failed: {e}")
-            time.sleep(2)
-
-        if not audio_bytes:
-            call_log.status = "failed"
-            db.commit()
-            return
-
-        # Run ASR pipeline
-        try:
-            asr_result = run_asr_pipeline(audio_bytes)
-        except Exception as e:
-            logger.error(f"📞 BG: ASR failed: {e}")
-            call_log.status = "failed"
-            db.commit()
-            return
-
-        intent = asr_result["intent"]
-        final_lang = asr_result["detected_language"]
-
-        if intent == "Yes":
-            confirmation_text = random.choice(RESPONSE_YES.get(final_lang, RESPONSE_YES["en"]))
-        elif intent == "No":
-            confirmation_text = random.choice(RESPONSE_NO.get(final_lang, RESPONSE_NO["en"]))
-        else:
-            confirmation_text = RESPONSE_UNCLEAR.get(final_lang, RESPONSE_UNCLEAR["en"])
-
-        call_log.transcript = asr_result["transcript"]
-        call_log.intent = intent
-        call_log.detected_language = final_lang
-        call_log.response_text = confirmation_text
-        call_log.status = "completed"
-        db.commit()
-
-        # Save to InterviewResponse
-        try:
-            patient_id_int = call_log.patient_id
-            db_session_id = None
-            if patient_id_int:
-                today = datetime.datetime.utcnow().date()
-                existing_session = db.query(models.InterviewSession).filter(
-                    models.InterviewSession.patient_id == patient_id_int,
-                    models.InterviewSession.start_time >= datetime.datetime(today.year, today.month, today.day),
-                ).first()
-                if existing_session:
-                    db_session_id = existing_session.id
-                else:
-                    new_session = models.InterviewSession(patient_id=patient_id_int)
-                    db.add(new_session)
-                    db.commit()
-                    db.refresh(new_session)
-                    db_session_id = new_session.id
-            if db_session_id:
-                new_response = models.InterviewResponse(
-                    session_id=db_session_id,
-                    assistant_question=call_log.question_text,
-                    patient_transcript=asr_result["transcript"],
-                    detected_language=final_lang,
-                    intent=intent,
-                    call_type="twilio",
-                    ai_response_text=confirmation_text,
-                )
-                db.add(new_response)
-                db.commit()
-                logger.info(f"📞 ✅ Saved to InterviewResponse: session={db_session_id}, intent={intent}")
-        except Exception as e:
-            logger.error(f"📞 BG: Failed to save InterviewResponse: {e}")
-
-        logger.info(f"📞 ✅ Call completed: intent={intent}, lang={final_lang}, transcript='{asr_result['transcript']}'")
-    except Exception as e:
-        logger.error(f"📞 BG error: {e}")
-    finally:
-        db.close()
 
 
 @router.post("/status-callback")
@@ -1073,21 +906,38 @@ def _execute_scheduled_call(scheduled_call_id: int, config: dict):
         sc.status = "executing"
         db.commit()
 
-        # Generate question audio
-        audio_filename = f"q_{uuid.uuid4().hex[:8]}.mp3"
-        generate_tts_file(sc.question_text or "Did you take your medicine?", "en", audio_filename)
+        # Use the patient's preferred language (stored on the scheduled call)
+        lang = sc.language or "en"
 
-        # Create TwilioCallLog
+        # Get the question text in the patient's language
+        q_map = HEALTH_QUESTIONS_ML.get(sc.question_id % len(HEALTH_QUESTIONS_ML), HEALTH_QUESTIONS_ML[0])
+        question_text_ml = q_map.get(lang, q_map["en"])
+        question_text_en = q_map["en"]  # English for logging/display
+
+        # Pre-generate TTS audio files in the patient's language
         call_log = models.TwilioCallLog(
             patient_id=sc.patient_id,
             phone_number=sc.phone_number,
-            question_text=sc.question_text,
-            question_audio_filename=audio_filename,
+            question_text=question_text_en,
+            detected_language=lang,
             status="initiating",
         )
         db.add(call_log)
         db.commit()
         db.refresh(call_log)
+
+        # Generate greeting, question, and prompt audio in patient's language
+        call_id = call_log.id
+        greeting_text = GREETING_TEXT.get(lang, GREETING_TEXT["en"])
+        prompt_text = ANSWER_PROMPT_TEXT.get(lang, ANSWER_PROMPT_TEXT["en"])
+
+        try:
+            generate_tts_file(greeting_text, lang, f"greeting_{call_id}.mp3")
+            generate_tts_file(question_text_ml, lang, f"question_{call_id}.mp3")
+            generate_tts_file(prompt_text, lang, f"prompt_{call_id}.mp3")
+            logger.info(f"📅 TTS audio generated in '{lang}' for scheduled call {call_id}")
+        except Exception as e:
+            logger.error(f"📅 TTS pre-generation failed for scheduled call: {e}")
 
         # Initiate Twilio call
         client = Client(config["account_sid"], config["auth_token"])
@@ -1096,7 +946,7 @@ def _execute_scheduled_call(scheduled_call_id: int, config: dict):
         call = client.calls.create(
             to=sc.phone_number,
             from_=config["phone_number"],
-            url=f"{base_url}/api/twilio/voice-webhook?call_log_id={call_log.id}",
+            url=f"{base_url}/api/twilio/voice-webhook?call_log_id={call_log.id}&lang={lang}",
             status_callback=f"{base_url}/api/twilio/status-callback?call_log_id={call_log.id}",
             status_callback_event=["initiated", "ringing", "answered", "completed"],
             timeout=30,
@@ -1125,6 +975,7 @@ def _execute_scheduled_call(scheduled_call_id: int, config: dict):
                     scheduled_time=next_time,
                     end_date=sc.end_date,
                     recurrence="daily",
+                    language=sc.language,
                     notes=sc.notes,
                     status="pending",
                 )
@@ -1146,6 +997,7 @@ def _execute_scheduled_call(scheduled_call_id: int, config: dict):
                     scheduled_time=next_time,
                     end_date=sc.end_date,
                     recurrence="weekly",
+                    language=sc.language,
                     notes=sc.notes,
                     status="pending",
                 )

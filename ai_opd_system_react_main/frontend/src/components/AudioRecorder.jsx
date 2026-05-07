@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { transcribeAudio, transcribeWithGPU } from "../services/api";
+import { transcribeAudio } from "../services/api";
 
 function AudioRecorder({ isRecording, setIsRecording, onTranscriptionUpdate, language }) {
 
@@ -9,36 +9,12 @@ const [isProcessing, setIsProcessing] = useState(false);
 const [transcript, setTranscript] = useState("");
 const [interimTranscript, setInterimTranscript] = useState("");
 const [isSpeechSupported, setIsSpeechSupported] = useState(true);
-const [asrMode, setAsrMode] = useState("gpu"); // "gpu", "backend", or "browser"
-const [detectedLanguage, setDetectedLanguage] = useState(null);
-const [gpuAvailable, setGpuAvailable] = useState(null);
+const [asrMode, setAsrMode] = useState("backend"); // "backend" or "browser"
 
 const mediaRecorderRef = useRef(null);
 const audioChunksRef = useRef([]);
 const timerRef = useRef(null);
 const recognitionRef = useRef(null);
-
-// Check GPU ASR availability on mount
-useEffect(() => {
-  checkGPUAvailability();
-}, []);
-
-const checkGPUAvailability = async () => {
-  try {
-    const VA_BASE = process.env.REACT_APP_VA_URL || "http://localhost:8000";
-    const response = await fetch(`${VA_BASE}/api/va/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    const data = await response.json();
-    setGpuAvailable(data.status === "ok" && data.models_loaded);
-    if (!data.models_loaded) {
-      setAsrMode("backend");
-    }
-  } catch {
-    setGpuAvailable(false);
-    setAsrMode("backend");
-  }
-};
 
 useEffect(() => {
   // Check if browser supports speech recognition (fallback)
@@ -149,9 +125,7 @@ const startRecording = async () => {
       stream.getTracks().forEach(track => track.stop());
 
       // Process based on ASR mode
-      if (asrMode === "gpu") {
-        await processAudioWithGPU(audioBlob);
-      } else if (asrMode === "backend") {
+      if (asrMode === "backend") {
         await processAudioWithBackendASR(audioBlob);
       }
 
@@ -173,7 +147,6 @@ const startRecording = async () => {
 
     setIsRecording(true);
     setRecordingTime(0);
-    setDetectedLanguage(null);
 
     // Start timer
     timerRef.current = setInterval(() => {
@@ -209,40 +182,6 @@ const stopRecording = () => {
     clearInterval(timerRef.current);
   }
 
-};
-
-const processAudioWithGPU = async (audioBlob) => {
-  setIsProcessing(true);
-  
-  try {
-    console.log("Sending audio to GPU ASR (IndicConformer + Whisper)...");
-    
-    // Map language name to code for the GPU ASR
-    const langMap = {
-      english: "en", hindi: "hi", kannada: "kn", marathi: "mr",
-      tamil: "ta", telugu: "te", bengali: "bn", malayalam: "ml",
-      gujarati: "gu", punjabi: "pa", odia: "or"
-    };
-    const langCode = langMap[language] || "auto";
-    
-    const result = await transcribeWithGPU(audioBlob, langCode);
-    
-    if (result.success && result.transcription) {
-      console.log("✓ GPU ASR transcription successful");
-      setTranscript(result.transcription);
-      onTranscriptionUpdate(result.transcription);
-      setDetectedLanguage(result.detected_language_name);
-    } else {
-      throw new Error("GPU ASR returned empty result");
-    }
-    
-  } catch (error) {
-    console.error("GPU ASR error:", error);
-    alert(`GPU ASR failed: ${error.message}\n\nFalling back to Whisper ASR.`);
-    setAsrMode("backend");
-  } finally {
-    setIsProcessing(false);
-  }
 };
 
 const processAudioWithBackendASR = async (audioBlob) => {
@@ -285,26 +224,6 @@ return (
     <label>ASR Mode:</label>
     <div className="mode-toggle">
       <button 
-        className={`mode-btn ${asrMode === "gpu" ? "active" : ""}`}
-        onClick={() => !isRecording && setAsrMode("gpu")}
-        disabled={isRecording || !gpuAvailable}
-        title={gpuAvailable ? "GPU ASR (IndicConformer + Whisper) - Best accuracy" : "GPU ASR unavailable - start Python backend on port 8000"}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
-          <rect x="9" y="9" width="6" height="6"></rect>
-          <line x1="9" y1="2" x2="9" y2="4"></line>
-          <line x1="15" y1="2" x2="15" y2="4"></line>
-          <line x1="9" y1="20" x2="9" y2="22"></line>
-          <line x1="15" y1="20" x2="15" y2="22"></line>
-          <line x1="20" y1="9" x2="22" y2="9"></line>
-          <line x1="20" y1="14" x2="22" y2="14"></line>
-          <line x1="2" y1="9" x2="4" y2="9"></line>
-          <line x1="2" y1="14" x2="4" y2="14"></line>
-        </svg>
-        GPU ASR
-      </button>
-      <button 
         className={`mode-btn ${asrMode === "backend" ? "active" : ""}`}
         onClick={() => !isRecording && setAsrMode("backend")}
         disabled={isRecording}
@@ -331,9 +250,7 @@ return (
       </button>
     </div>
     <span className="mode-description">
-      {asrMode === "gpu" 
-        ? "Using GPU ASR (IndicConformer + Whisper) — 11 languages, highest accuracy" 
-        : asrMode === "backend" 
+      {asrMode === "backend" 
         ? "Using Whisper ASR (transcribes after recording)" 
         : "Using browser speech recognition (real-time)"}
     </span>
@@ -377,20 +294,8 @@ return (
   {isProcessing && (
     <div className="processing-indicator">
       <div className="processing-spinner"></div>
-      <p>Processing audio with {asrMode === "gpu" ? "GPU ASR (IndicConformer + Whisper)" : "Whisper ASR"}...</p>
+      <p>Processing audio with Whisper ASR...</p>
       <p className="processing-detail">This may take a few seconds depending on audio length</p>
-    </div>
-  )}
-
-  {/* Detected Language Badge */}
-  {detectedLanguage && !isProcessing && !isRecording && (
-    <div className="detected-language-banner">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="10"></circle>
-        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-        <path d="M2 12h20"></path>
-      </svg>
-      <span>Detected Language: <strong>{detectedLanguage}</strong></span>
     </div>
   )}
 
@@ -431,7 +336,7 @@ return (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
-          <span>Audio recorded and transcribed successfully{asrMode === "gpu" ? " (GPU ASR)" : ""}</span>
+          <span>Audio recorded and transcribed successfully</span>
         </div>
       )}
 
