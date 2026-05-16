@@ -12,6 +12,7 @@ gTTS
 # Twilio (phone-based health-check calls)
 twilio
 python-dotenv
+httpx
 
 # Scheduler (for recurring calls)
 apscheduler

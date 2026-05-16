@@ -163,12 +163,28 @@ HEALTH_QUESTIONS = [
 ]
 
 # ──────────────────────────────────────────────────────────────
-# gTTS Language Code Mapping
+# Sarvam AI TTS Language Code Mapping (BCP-47)
 # ──────────────────────────────────────────────────────────────
+SARVAM_LANG_MAP = {
+    "en": "en-IN", "hi": "hi-IN", "kn": "kn-IN", "mr": "mr-IN", "ta": "ta-IN",
+    "te": "te-IN", "bn": "bn-IN", "ml": "ml-IN", "gu": "gu-IN", "pa": "pa-IN",
+    "or": "od-IN",
+}
+
+# Legacy alias (keep for backward compat)
 GTTS_LANG_MAP = {
     "en": "en", "hi": "hi", "kn": "kn", "mr": "mr", "ta": "ta",
     "te": "te", "bn": "bn", "ml": "ml", "gu": "gu", "pa": "pa",
     "or": "or", "ur": "ur"
+}
+
+# ──────────────────────────────────────────────────────────────
+# Deepgram STT Language Code Mapping
+# ──────────────────────────────────────────────────────────────
+DEEPGRAM_LANG_MAP = {
+    "en": "en-IN", "hi": "hi", "kn": "kn", "mr": "mr", "ta": "ta",
+    "te": "te", "bn": "bn", "ml": "ml", "gu": "gu", "pa": "pa",
+    "or": "or",
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -188,12 +204,64 @@ WHISPER_LANG_TOKENS = [
 
 SUPPORTED_LANG_CODES = ["en", "hi", "kn", "mr", "ta", "te", "bn", "ml", "gu", "pa", "or"]
 
-# Twilio <Gather speech> language codes
+# Twilio <Gather speech> language codes (kept as fallback reference)
 TWILIO_SPEECH_LANG = {
     "en": "en-IN", "hi": "hi-IN", "kn": "kn-IN", "mr": "mr-IN",
     "ta": "ta-IN", "te": "te-IN", "bn": "bn-IN", "ml": "ml-IN",
     "gu": "gu-IN", "pa": "pa-IN", "or": "or-IN",
 }
+
+# Twilio <Say> voices for instant fallback (no Sarvam wait)
+TWILIO_SAY_VOICE = {
+    "en": "Polly.Joanna", "hi": "Polly.Aditi", "kn": "Polly.Aditi",
+    "mr": "Polly.Aditi", "ta": "Polly.Aditi", "te": "Polly.Aditi",
+    "bn": "Polly.Aditi", "ml": "Polly.Aditi", "gu": "Polly.Aditi",
+    "pa": "Polly.Aditi", "or": "Polly.Aditi",
+}
+
+# Short spoken confirmations when pre-generated MP3 is not ready yet
+SHORT_RESPONSE_YES = {
+    "en": "Thank you. I have recorded that you took your medicine.",
+    "hi": "धन्यवाद। मैंने दर्ज कर लिया कि आपने दवा ली है।",
+    "kn": "ಧನ್ಯವಾದಗಳು. ನೀವು ಔಷಧಿ ತೆಗೆದುಕೊಂಡಿದ್ದೀರಿ ಎಂದು ದಾಖಲಿಸಿದ್ದೇನೆ.",
+    "mr": "धन्यवाद. तुम्ही औषध घेतले आहे याची नोंद केली.",
+    "ta": "நன்றி. மருந்து எடுத்ததாக பதிவு செய்துள்ளேன்.",
+    "te": "ధన్యవాదాలు. మీరు మందు తీసుకున్నారని నమోదు చేశాను.",
+    "bn": "ধন্যবাদ। ওষুধ খেয়েছেন বলে রেকর্ড করেছি।",
+    "ml": "നന്ദി. മരുന്ന് കഴിച്ചതായി രേഖപ്പെടുത്തി.",
+    "gu": "આભાર. દવા લીધી છે તે નોંધ્યું.",
+    "pa": "ਧੰਨਵਾਦ। ਦਵਾਈ ਲਈ ਹੈ ਇਹ ਦਰਜ ਕੀਤਾ।",
+    "or": "ଧନ୍ୟବାଦ। ଔଷଧ ଖାଇଛନ୍ତି ବୋଲି ରେକର୍ଡ କରିଛି।",
+}
+
+SHORT_RESPONSE_NO = {
+    "en": "Noted. Please take your medicine as soon as you can.",
+    "hi": "ठीक है। कृपया जल्द से जल्द अपनी दवा ले लें।",
+    "kn": "ಸರಿ. ದಯವಿಟ್ಟು ಶೀಘ್ರದಲ್ಲೇ ಔಷಧಿ ತೆಗೆದುಕೊಳ್ಳಿ.",
+    "mr": "ठीक आहे. कृपया लवकर औषध घ्या.",
+    "ta": "பதிவு செய்துள்ளேன். தயவுசெய்து விரைவில் மருந்து எடுத்துக்கொள்ளுங்கள்.",
+    "te": "నోట్ చేశాను. దయచేసి త్వరలో మందు తీసుకోండి.",
+    "bn": "নোট করেছি। দয়া করে শীঘ্র ওষুধ খান।",
+    "ml": "നോട്ട് ചെയ്തു. ദയവായി വേഗം മരുന്ന് കഴിക്കുക.",
+    "gu": "નોંધ્યું. કૃપા કરીને ટૂંક સમયમાં દવા લો.",
+    "pa": "ਨੋਟ ਕੀਤਾ। ਕਿਰਪਾ ਕਰਕੇ ਜਲਦੀ ਦਵਾਈ ਲਓ।",
+    "or": "ନୋଟ କଲି। ଦୟାକରି ଶୀଘ୍ର ଔଷଧ ନିଅନ୍ତୁ।",
+}
+
+SHORT_RESPONSE_UNCLEAR = {
+    "en": "I did not understand. Please update the dashboard manually.",
+    "hi": "समझ नहीं आया। कृपया डैशबोर्ड पर अपडेट करें।",
+    "kn": "ಅರ್ಥವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ಅಪ್‌ಡೇಟ್ ಮಾಡಿ.",
+    "mr": "समजले नाही. कृपया डॅशबोर्ड अपडेट करा.",
+    "ta": "புரியவில்லை. தயவுசெய்து டாஷ்போர்டை புதுப்பிக்கவும்.",
+    "te": "అర్థం కాలేదు. దయచేసి డాష్‌బోర్డ్ అప్‌డేట్ చేయండి.",
+    "bn": "বুঝতে পারিনি। অনুগ্রহ করে ড্যাশবোর্ড আপডেট করুন।",
+    "ml": "മനസ്സിലായില്ല. ദയവായി ഡാഷ്‌ബോർഡ് അപ്‌ഡേറ്റ് ചെയ്യുക.",
+    "gu": "સમજાયું નહીં. કૃપા કરીને ડેશબોર્ડ અપડેટ કરો.",
+    "pa": "ਸਮਝ ਨਹੀਂ ਆਈ। ਕਿਰਪਾ ਕਰਕੇ ਡੈਸ਼ਬੋਰਡ ਅੱਪਡੇਟ ਕਰੋ।",
+    "or": "ବୁଝିପାରିଲି ନାହିଁ। ଦୟାକରି ଡ୍ୟାସବୋର୍ଡ ଅପଡେଟ୍ କରନ୍ତୁ।",
+}
+
 
 # Multilingual greetings for TTS
 GREETING_TEXT = {

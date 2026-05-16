@@ -3,33 +3,45 @@ Twilio Phone Call Integration for Voice Assistant (GPU-Free)
 
 Handles the complete lifecycle of automated medication adherence phone calls:
 1. Initiate outbound call via Twilio REST API
-2. Play health-check question via TwiML <Say> (English)
-3. Capture patient's spoken answer via TwiML <Gather speech> (Twilio's built-in ASR)
-4. Classify intent using keyword matching (CPU only)
-5. Generate multilingual TTS confirmation via gTTS
-6. Play confirmation to patient and hang up
-7. Log everything to the database
+2. Play health-check question via Sarvam AI TTS (Bulbul v3)
+3. Record patient's spoken answer via TwiML <Record>
+4. Transcribe recording via Deepgram Nova-3 STT
+5. Classify intent using keyword matching (CPU only)
+6. Generate multilingual TTS confirmation via Sarvam AI
+7. Play confirmation to patient and hang up
+8. Log everything to the database
 """
 
 import os
+import re
 import uuid
 import time
+import base64
 import random
 import logging
 import datetime
+
+import httpx
 
 from fastapi import APIRouter, Request, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import Response, FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
-from backend.twilio_config import get_twilio_config, is_twilio_configured, validate_twilio_connection
+from backend.twilio_config import (
+    get_twilio_config, is_twilio_configured, validate_twilio_connection,
+    check_webhook_reachable, check_ngrok_local,
+    get_sarvam_config, is_sarvam_configured,
+    get_deepgram_config, is_deepgram_configured,
+)
 from backend.constants import (
-    HEALTH_QUESTIONS, INTENT_KEYWORDS, RESPONSE_YES, RESPONSE_NO,
-    RESPONSE_UNCLEAR, GTTS_LANG_MAP, LANG_NAMES,
-    SUPPORTED_LANG_CODES, TWILIO_SPEECH_LANG,
+    HEALTH_QUESTIONS, RESPONSE_YES, RESPONSE_NO,
+    RESPONSE_UNCLEAR, SARVAM_LANG_MAP, DEEPGRAM_LANG_MAP, LANG_NAMES,
+    SUPPORTED_LANG_CODES, TWILIO_SPEECH_LANG, TWILIO_SAY_VOICE,
+    SHORT_RESPONSE_YES, SHORT_RESPONSE_NO, SHORT_RESPONSE_UNCLEAR,
     GREETING_TEXT, ANSWER_PROMPT_TEXT, HEALTH_QUESTIONS_ML,
 )
+from backend.intent import classify_call_response
 import backend.models as models
 
 logger = logging.getLogger("twilio-calls")
@@ -39,8 +51,15 @@ router = APIRouter()
 # ──────────────────────────────────────────────────────────────
 # Temp Audio Directory (for serving TTS files to Twilio)
 # ──────────────────────────────────────────────────────────────
-TEMP_AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp_audio")
+# Must match generate_tts_file() — single directory for all TTS MP3s
+TEMP_AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
 os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+
+
+def _audio_filepath(filename: str) -> str:
+    """Resolve TTS filename safely (no path traversal)."""
+    safe_name = os.path.basename(filename)
+    return os.path.join(TEMP_AUDIO_DIR, safe_name)
 
 
 def get_db():
@@ -53,44 +72,291 @@ def get_db():
 
 
 # ──────────────────────────────────────────────────────────────
-# NOTE: GPU ASR functions (preprocess_recording, run_asr_pipeline)
-# were removed. Twilio's built-in <Gather speech> handles all
-# speech recognition — no GPU, torch, or whisper needed.
+# Sarvam AI TTS — replaces gTTS for natural Indian-language voices
+# Deepgram Nova-3 STT — replaces Twilio's built-in <Gather speech>
 # ──────────────────────────────────────────────────────────────
 
+SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+DEEPGRAM_LISTEN_URL = "https://api.deepgram.com/v1/listen"
 
 
 def generate_tts_file(text: str, lang: str, filename: str) -> str:
-    """Generate a TTS MP3 file and return its path."""
-    import tempfile
-    from gtts import gTTS
+    """
+    Generate a TTS MP3 file using Sarvam AI REST API.
+    Falls back to English if the requested language fails.
+    Returns the file path.
+    """
+    sarvam = get_sarvam_config()
+    filepath = os.path.join(TEMP_AUDIO_DIR, filename)
 
-    tts_lang = GTTS_LANG_MAP.get(lang, "en")
-    # Use a dedicated temp directory for audio files
-    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
-    os.makedirs(audio_dir, exist_ok=True)
-    filepath = os.path.join(audio_dir, filename)
+    sarvam_lang = SARVAM_LANG_MAP.get(lang, "en-IN")
+
+    def _call_sarvam(target_lang: str) -> bytes:
+        payload = {
+            "text": text,
+            "target_language_code": target_lang,
+            "speaker": sarvam["speaker"] if sarvam else "simran",
+            "model": sarvam["model"] if sarvam else "bulbul:v3",
+            "output_audio_codec": "mp3",
+            "enable_preprocessing": True,
+        }
+        headers = {
+            "api-subscription-key": sarvam["api_key"] if sarvam else "",
+            "Content-Type": "application/json",
+        }
+        resp = httpx.post(SARVAM_TTS_URL, json=payload, headers=headers, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+        # Sarvam returns base64-encoded audio in the "audios" field
+        audio_b64 = data.get("audios", [None])[0]
+        if not audio_b64:
+            raise ValueError("No audio data in Sarvam response")
+        return base64.b64decode(audio_b64)
 
     try:
-        tts = gTTS(text=text, lang=tts_lang)
-        tts.save(filepath)
+        audio_bytes = _call_sarvam(sarvam_lang)
+        with open(filepath, "wb") as f:
+            f.write(audio_bytes)
+        logger.info(f"🔊 Sarvam TTS: '{text[:50]}...' → {filename} ({sarvam_lang})")
         return filepath
     except Exception as e:
-        logger.error(f"TTS generation failed for lang '{tts_lang}': {e}")
+        logger.error(f"🔊 Sarvam TTS failed for lang '{sarvam_lang}': {e}")
         # Fallback to English
-        tts = gTTS(text=text, lang="en")
-        tts.save(filepath)
-        return filepath
+        try:
+            audio_bytes = _call_sarvam("en-IN")
+            with open(filepath, "wb") as f:
+                f.write(audio_bytes)
+            return filepath
+        except Exception as e2:
+            logger.error(f"🔊 Sarvam TTS fallback also failed: {e2}")
+            raise
+
+
+def _parse_deepgram_response(data: dict, fallback_lang: str) -> dict:
+    """Parse Deepgram JSON into transcript, confidence, detected_language."""
+    transcript = ""
+    confidence = 0.0
+    detected_lang = fallback_lang
+    try:
+        channel = data["results"]["channels"][0]
+        alt = channel["alternatives"][0]
+        transcript = alt.get("transcript", "").strip()
+        confidence = alt.get("confidence", 0.0)
+        dg_detected = channel.get("detected_language") or alt.get("detected_language", "")
+        if dg_detected:
+            dg_to_internal = {
+                "en": "en", "en-IN": "en", "en-US": "en",
+                "hi": "hi", "hi-IN": "hi", "kn": "kn", "kn-IN": "kn",
+                "mr": "mr", "ta": "ta", "te": "te", "bn": "bn",
+                "ml": "ml", "gu": "gu", "pa": "pa", "or": "or",
+            }
+            detected_lang = dg_to_internal.get(dg_detected.split("-")[0], dg_to_internal.get(dg_detected, fallback_lang))
+    except (KeyError, IndexError):
+        pass
+    return {"transcript": transcript, "confidence": confidence, "detected_language": detected_lang}
+
+
+def transcribe_with_deepgram(audio_url: str, lang: str = "hi") -> dict:
+    """
+    Transcribe patient audio with Deepgram Nova-3.
+    Always uses multilingual mode first; retries with Hindi/Kannada hints if empty.
+    The UI-selected call language does NOT restrict STT — answers may be in any language.
+    """
+    dg_config = get_deepgram_config()
+    if not dg_config:
+        raise ValueError("Deepgram API key not configured")
+
+    twilio_config = get_twilio_config()
+    twilio_auth = None
+    if twilio_config:
+        twilio_auth = (twilio_config["account_sid"], twilio_config["auth_token"])
+
+    dl_resp = httpx.get(audio_url, auth=twilio_auth, timeout=30.0, follow_redirects=True)
+    dl_resp.raise_for_status()
+    audio_bytes = dl_resp.content
+    logger.info(f"🎙️ Downloaded Twilio recording: {len(audio_bytes)} bytes")
+
+    headers = {
+        "Authorization": f"Token {dg_config['api_key']}",
+        "Content-Type": "audio/wav",
+    }
+
+    # Single multilingual pass — fast path for short yes/no answers
+    params = {
+        "model": "nova-3",
+        "language": "multi",
+        "smart_format": "true",
+        "punctuate": "true",
+    }
+    resp = httpx.post(
+        DEEPGRAM_LISTEN_URL,
+        content=audio_bytes,
+        headers=headers,
+        params=params,
+        timeout=12.0,
+    )
+    resp.raise_for_status()
+    parsed = _parse_deepgram_response(resp.json(), lang)
+    logger.info(
+        f"🎙️ Deepgram: '{parsed['transcript']}' "
+        f"(confidence={parsed['confidence']:.2f}, detected={parsed['detected_language']})"
+    )
+    return parsed
+
+
+def normalize_phone_e164(phone: str, default_country_code: str = "91") -> str:
+    """Normalize to E.164 (+919876543210). Twilio requires this format."""
+    raw = phone.strip()
+    if raw.startswith("+"):
+        digits = re.sub(r"\D", "", raw)
+        return f"+{digits}" if digits else raw
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return raw
+    if len(digits) == 10:
+        return f"+{default_country_code}{digits}"
+    if len(digits) == 11 and digits.startswith("0"):
+        return f"+{default_country_code}{digits[1:]}"
+    if len(digits) >= 11 and not raw.startswith("+"):
+        return f"+{digits}"
+    return f"+{digits}"
+
+
+def create_outbound_call(config: dict, to: str, call_log_id: int, language: str) -> str:
+    """
+    Place outbound call via Twilio REST API (httpx with explicit timeout).
+    Returns call SID.
+    """
+    base_url = config["webhook_base_url"]
+    voice_url = f"{base_url}/api/twilio/voice-webhook?call_log_id={call_log_id}&lang={language}"
+    status_url = f"{base_url}/api/twilio/status-callback?call_log_id={call_log_id}"
+
+    api_url = f"https://api.twilio.com/2010-04-01/Accounts/{config['account_sid']}/Calls.json"
+    payload = {
+        "To": to,
+        "From": config["phone_number"],
+        "Url": voice_url,
+        "StatusCallback": status_url,
+        "StatusCallbackEvent": ["initiated", "ringing", "answered", "completed"],
+        "Timeout": "30",
+    }
+
+    resp = httpx.post(
+        api_url,
+        data=payload,
+        auth=(config["account_sid"], config["auth_token"]),
+        timeout=30.0,
+    )
+    if resp.status_code >= 400:
+        try:
+            err = resp.json()
+            msg = err.get("message") or err.get("detail") or resp.text
+            code = err.get("code", resp.status_code)
+        except Exception:
+            msg = resp.text
+            code = resp.status_code
+        raise ValueError(f"Twilio error {code}: {msg}")
+
+    data = resp.json()
+    return data["sid"]
+
+
+def pregenerate_opening_audio(call_id: int, language: str, question_text: str):
+    """Greeting, question, prompt only — must finish before dialing."""
+    greeting_text = GREETING_TEXT.get(language, GREETING_TEXT["en"])
+    prompt_text = ANSWER_PROMPT_TEXT.get(language, ANSWER_PROMPT_TEXT["en"])
+    generate_tts_file(greeting_text, language, f"greeting_{call_id}.mp3")
+    generate_tts_file(question_text, language, f"question_{call_id}.mp3")
+    generate_tts_file(prompt_text, language, f"prompt_{call_id}.mp3")
+
+
+def pregenerate_confirmation_audio(call_id: int, languages: list[str]):
+    """Pre-generate yes/no/unclear MP3s for priority languages (runs in background)."""
+    for resp_lang in languages:
+        if resp_lang not in SUPPORTED_LANG_CODES:
+            continue
+        for intent_type, responses in [("yes", RESPONSE_YES), ("no", RESPONSE_NO)]:
+            resp_text = responses.get(resp_lang, responses["en"])[0]
+            fname = f"conf_{intent_type}_{resp_lang}_{call_id}.mp3"
+            if not os.path.exists(_audio_filepath(fname)):
+                try:
+                    generate_tts_file(resp_text, resp_lang, fname)
+                except Exception as e:
+                    logger.warning(f"📞 TTS skip {fname}: {e}")
+        unclear_text = RESPONSE_UNCLEAR.get(resp_lang, RESPONSE_UNCLEAR["en"])
+        fname = f"conf_unclear_{resp_lang}_{call_id}.mp3"
+        if not os.path.exists(_audio_filepath(fname)):
+            try:
+                generate_tts_file(unclear_text, resp_lang, fname)
+            except Exception as e:
+                logger.warning(f"📞 TTS skip {fname}: {e}")
+    logger.info(f"📞 Confirmation TTS ready for call {call_id}: {languages}")
+
+
+def _resolve_confirmation_file(call_id: int, intent: str, lang: str) -> str | None:
+    """Find first available pre-generated confirmation MP3 (with language fallbacks)."""
+    intent_key = {"Yes": "yes", "No": "no"}.get(intent, "unclear")
+    fallbacks = list(dict.fromkeys([lang, "en", "hi", "kn"]))
+    for lc in fallbacks:
+        fname = f"conf_{intent_key}_{lc}_{call_id}.mp3"
+        if os.path.exists(_audio_filepath(fname)):
+            return fname
+    return None
+
+
+def _short_confirmation_text(intent: str, lang: str) -> str:
+    """Short text for instant Twilio <Say> when MP3 is not ready."""
+    lc = lang if lang in SUPPORTED_LANG_CODES else "en"
+    if intent == "Yes":
+        return SHORT_RESPONSE_YES.get(lc, SHORT_RESPONSE_YES["en"])
+    if intent == "No":
+        return SHORT_RESPONSE_NO.get(lc, SHORT_RESPONSE_NO["en"])
+    return SHORT_RESPONSE_UNCLEAR.get(lc, SHORT_RESPONSE_UNCLEAR["en"])
+
+
+def _save_interview_response(call_log_id: int, speech_result: str, detected_lang: str, intent: str, confirmation: str):
+    """Persist call result to DB (runs after TwiML is returned to Twilio)."""
+    db = SessionLocal()
+    try:
+        call_log = db.query(models.TwilioCallLog).filter(models.TwilioCallLog.id == call_log_id).first()
+        if not call_log or not call_log.patient_id:
+            return
+        today = datetime.datetime.utcnow().date()
+        existing_session = db.query(models.InterviewSession).filter(
+            models.InterviewSession.patient_id == call_log.patient_id,
+            models.InterviewSession.start_time >= datetime.datetime(today.year, today.month, today.day),
+        ).first()
+        if existing_session:
+            db_session_id = existing_session.id
+        else:
+            new_session = models.InterviewSession(patient_id=call_log.patient_id)
+            db.add(new_session)
+            db.commit()
+            db.refresh(new_session)
+            db_session_id = new_session.id
+        db.add(models.InterviewResponse(
+            session_id=db_session_id,
+            assistant_question=call_log.question_text,
+            patient_transcript=speech_result,
+            detected_language=detected_lang,
+            intent=intent,
+            call_type="twilio",
+            ai_response_text=confirmation,
+        ))
+        db.commit()
+    except Exception as e:
+        logger.error(f"📞 Failed to save InterviewResponse: {e}")
+    finally:
+        db.close()
 
 
 def cleanup_old_audio_files():
     """Delete temp audio files older than 1 hour."""
-    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
-    if not os.path.exists(audio_dir):
+    if not os.path.exists(TEMP_AUDIO_DIR):
         return
     cutoff = time.time() - 3600
-    for filename in os.listdir(audio_dir):
-        filepath = os.path.join(audio_dir, filename)
+    for filename in os.listdir(TEMP_AUDIO_DIR):
+        filepath = os.path.join(TEMP_AUDIO_DIR, filename)
         if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
             try:
                 os.remove(filepath)
@@ -104,33 +370,42 @@ def cleanup_old_audio_files():
 
 @router.get("/config")
 async def twilio_config_status():
-    """Check if Twilio is configured and test the connection."""
+    """Check if Twilio is configured and test the connection (fast, parallel checks)."""
     if not is_twilio_configured():
         return JSONResponse(content={
             "configured": False,
             "message": "Twilio credentials not found. Create a .env file with TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, and TWILIO_WEBHOOK_BASE_URL."
         })
 
-    success, message = validate_twilio_connection()
+    from concurrent.futures import ThreadPoolExecutor
+
+    config = get_twilio_config()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        twilio_future = pool.submit(validate_twilio_connection, 8.0)
+        webhook_future = pool.submit(check_ngrok_local, 2.0)
+        success, message = twilio_future.result(timeout=10.0)
+        webhook_ok, webhook_msg = webhook_future.result(timeout=10.0)
+
     return JSONResponse(content={
         "configured": True,
         "connected": success,
         "message": message,
-        "webhook_base_url": get_twilio_config()["webhook_base_url"] if success else None,
+        "webhook_base_url": config["webhook_base_url"],
+        "webhook_reachable": webhook_ok,
+        "webhook_message": webhook_msg,
+        "sarvam_configured": is_sarvam_configured(),
+        "deepgram_configured": is_deepgram_configured(),
     })
 
 
 @router.get("/serve-audio/{filename}")
 async def serve_audio(filename: str):
     """Serve a generated TTS audio file to Twilio's <Play> verb."""
-    from fastapi.responses import FileResponse
-
-    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_audio")
-    filepath = os.path.join(audio_dir, filename)
-
+    filepath = _audio_filepath(filename)
     if not os.path.exists(filepath):
+        logger.warning(f"📞 Audio not found: {filename}")
         raise HTTPException(status_code=404, detail="Audio file not found")
-
     return FileResponse(filepath, media_type="audio/mpeg")
 
 
@@ -159,6 +434,23 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
     if not phone_number:
         raise HTTPException(status_code=400, detail="Phone number is required.")
 
+    phone_number = normalize_phone_e164(phone_number)
+    if not re.match(r"^\+\d{10,15}$", phone_number):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid phone number '{phone_number}'. Use E.164 format, e.g. +919876543210",
+        )
+
+    webhook_ok, webhook_msg = check_ngrok_local(timeout=3.0)
+    if not webhook_ok:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cannot place call — Twilio cannot reach your server. {webhook_msg} "
+                "Run in a terminal: ngrok http 8000, then set TWILIO_WEBHOOK_BASE_URL in .env to the ngrok HTTPS URL."
+            ),
+        )
+
     # Get question text in patient's language
     q_map = HEALTH_QUESTIONS_ML.get(question_id % len(HEALTH_QUESTIONS_ML), HEALTH_QUESTIONS_ML[0])
     question_text = q_map.get(language, q_map["en"])
@@ -177,46 +469,33 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
     db.commit()
     db.refresh(call_log)
 
-    # Pre-generate TTS audio files in the patient's language
     call_id = call_log.id
-    greeting_text = GREETING_TEXT.get(language, GREETING_TEXT["en"])
-    prompt_text = ANSWER_PROMPT_TEXT.get(language, ANSWER_PROMPT_TEXT["en"])
 
+    # Only generate call-opening audio before dialing (avoids Twilio API timeout)
     try:
-        generate_tts_file(greeting_text, language, f"greeting_{call_id}.mp3")
-        generate_tts_file(question_text, language, f"question_{call_id}.mp3")
-        generate_tts_file(prompt_text, language, f"prompt_{call_id}.mp3")
-        logger.info(f"📞 TTS audio generated in '{language}' for call {call_id}")
+        pregenerate_opening_audio(call_id, language, question_text)
+        logger.info(f"📞 Opening TTS ready for call {call_id} ({language})")
     except Exception as e:
         logger.error(f"📞 TTS pre-generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"TTS generation failed: {e}")
 
-    # Create Twilio outbound call
+    # Place call immediately; generate confirmation MP3s in background while patient listens
+    priority_langs = list(dict.fromkeys([language, "en", "hi", "kn"]))
     try:
-        from twilio.rest import Client
+        call_sid = create_outbound_call(config, phone_number, call_log.id, language)
 
-        client = Client(config["account_sid"], config["auth_token"])
-        base_url = config["webhook_base_url"]
-
-        call = client.calls.create(
-            to=phone_number,
-            from_=config["phone_number"],
-            url=f"{base_url}/api/twilio/voice-webhook?call_log_id={call_log.id}&lang={language}",
-            status_callback=f"{base_url}/api/twilio/status-callback?call_log_id={call_log.id}",
-            status_callback_event=["initiated", "ringing", "answered", "completed"],
-            timeout=30,
-        )
-
-        call_log.call_sid = call.sid
+        call_log.call_sid = call_sid
         call_log.status = "initiated"
         db.commit()
 
-        logger.info(f"📞 Call initiated: SID={call.sid}, to={phone_number}, lang={language}, question='{question_text}'")
+        logger.info(f"📞 Call initiated: SID={call_sid}, to={phone_number}, lang={language}")
 
+        background_tasks.add_task(pregenerate_confirmation_audio, call_id, priority_langs)
         background_tasks.add_task(cleanup_old_audio_files)
 
         return JSONResponse(content={
             "success": True,
-            "call_sid": call.sid,
+            "call_sid": call_sid,
             "call_log_id": call_log.id,
             "status": "initiated",
             "phone_number": phone_number,
@@ -228,96 +507,115 @@ async def initiate_call(request: Request, background_tasks: BackgroundTasks, db:
         call_log.status = "failed"
         db.commit()
         logger.error(f"📞 Twilio call creation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to initiate call: {str(e)}")
+        err = str(e)
+        if "timed out" in err.lower():
+            err = (
+                "Connection to Twilio timed out. Check internet/firewall/VPN, then retry. "
+                "If the problem persists, try again in a few minutes."
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to initiate call: {err}")
 
 
-@router.post("/voice-webhook")
+def _play_or_say(response, audio_base: str, filename: str, fallback_text: str, voice: str = "alice"):
+    """Play pre-generated MP3 if present; otherwise speak text so the call never fails silently."""
+    if os.path.exists(_audio_filepath(filename)):
+        response.play(f"{audio_base}/{filename}")
+    else:
+        logger.warning(f"📞 Missing audio {filename}, using <Say> fallback")
+        response.say(fallback_text, voice=voice)
+
+
+@router.api_route("/voice-webhook", methods=["GET", "POST"])
 async def voice_webhook(call_log_id: int, lang: str = "en", db: Session = Depends(get_db)):
     """
     TwiML webhook — called by Twilio when the patient picks up.
-    Question is asked in the PATIENT'S SELECTED LANGUAGE via gTTS <Play>.
-    Listens for patient's response in their language via <Gather speech>.
-    NO GPU required.
+    Question is asked in the PATIENT'S SELECTED LANGUAGE via Sarvam AI TTS.
+    Records patient's response via <Record>, then sends to Deepgram for STT.
     """
-    from twilio.twiml.voice_response import VoiceResponse, Gather
+    from twilio.twiml.voice_response import VoiceResponse
 
-    call_log = db.query(models.TwilioCallLog).filter(models.TwilioCallLog.id == call_log_id).first()
-    config = get_twilio_config()
-    base_url = config["webhook_base_url"] if config else ""
+    try:
+        call_log = db.query(models.TwilioCallLog).filter(models.TwilioCallLog.id == call_log_id).first()
+        config = get_twilio_config()
+        if not config:
+            raise ValueError("Twilio not configured")
+        base_url = config["webhook_base_url"]
 
-    response = VoiceResponse()
+        response = VoiceResponse()
 
-    if not call_log:
-        response.say("Sorry, we could not find your call information. Goodbye.", voice="alice")
+        if not call_log:
+            response.say("Sorry, we could not find your call information. Goodbye.", voice="alice")
+            response.hangup()
+            return Response(content=str(response), media_type="application/xml")
+
+        if lang not in SUPPORTED_LANG_CODES:
+            lang = "en"
+
+        q_map = HEALTH_QUESTIONS_ML.get(0, HEALTH_QUESTIONS_ML[0])
+        question_text = call_log.question_text or q_map.get(lang, q_map["en"])
+        greeting_text = GREETING_TEXT.get(lang, GREETING_TEXT["en"])
+        prompt_text = ANSWER_PROMPT_TEXT.get(lang, ANSWER_PROMPT_TEXT["en"])
+
+        audio_base = f"{base_url}/api/twilio/serve-audio"
+
+        _play_or_say(response, audio_base, f"greeting_{call_log_id}.mp3", greeting_text)
+        response.pause(length=1)
+        _play_or_say(response, audio_base, f"question_{call_log_id}.mp3", question_text)
+        response.pause(length=1)
+        _play_or_say(response, audio_base, f"prompt_{call_log_id}.mp3", prompt_text)
+
+        response.record(
+            action=f"{base_url}/api/twilio/process-recording?call_log_id={call_log_id}&lang={lang}",
+            max_length=10,
+            play_beep=True,
+            trim="trim-silence",
+            timeout=5,
+            recording_status_callback=f"{base_url}/api/twilio/recording-status?call_log_id={call_log_id}",
+        )
+
+        fallback_text = RESPONSE_UNCLEAR.get(lang, RESPONSE_UNCLEAR["en"])
+        fallback_file = f"fallback_{call_log_id}.mp3"
+        try:
+            if not os.path.exists(_audio_filepath(fallback_file)):
+                generate_tts_file(fallback_text, lang, fallback_file)
+            _play_or_say(response, audio_base, fallback_file, fallback_text)
+        except Exception:
+            response.say("We did not receive your response. Goodbye.", voice="alice")
         response.hangup()
+
+        call_log.status = "in-progress"
+        db.commit()
+
+        logger.info(f"📞 Voice webhook served for call_log_id={call_log_id}, lang={lang}")
         return Response(content=str(response), media_type="application/xml")
 
-    if lang not in SUPPORTED_LANG_CODES:
-        lang = "en"
-
-    # --- Play greeting, question, and prompt in patient's language ---
-    audio_base = f"{base_url}/api/twilio/serve-audio"
-
-    # Play greeting in patient's language
-    response.play(f"{audio_base}/greeting_{call_log_id}.mp3")
-    response.pause(length=1)
-
-    # Play the health question in patient's language
-    response.play(f"{audio_base}/question_{call_log_id}.mp3")
-    response.pause(length=1)
-
-    # Play the answer prompt in patient's language
-    response.play(f"{audio_base}/prompt_{call_log_id}.mp3")
-
-    # Listen for patient's response using Twilio's ASR
-    # Use en-IN with enhanced model for best cross-language recognition
-    twilio_lang = TWILIO_SPEECH_LANG.get(lang, "en-IN")
-    
-    gather = Gather(
-        input="speech",
-        language="en-IN",
-        action=f"{base_url}/api/twilio/process-speech?call_log_id={call_log_id}&lang={lang}",
-        timeout=15,
-        speech_timeout=3,
-        hints="yes, no, yeah, nope, okay, done, took it, i did, i have, not yet, forgot, haan, ha, ji, nahi, na, nahin, le liya, nahi liya, kha liya, nahi khaya, haudu, illa, ho, nako",
-        enhanced=True,
-    )
-    response.append(gather)
-
-    # Fallback if no speech detected at all
-    fallback_text = RESPONSE_UNCLEAR.get(lang, RESPONSE_UNCLEAR["en"])
-    fallback_file = f"fallback_{call_log_id}.mp3"
-    try:
-        generate_tts_file(fallback_text, lang, fallback_file)
-        response.play(f"{audio_base}/{fallback_file}")
-    except Exception:
-        response.say("We did not receive your response. Goodbye.", voice="alice")
-    response.hangup()
-
-    call_log.status = "in-progress"
-    db.commit()
-
-    logger.info(f"📞 Voice webhook served for call_log_id={call_log_id}, lang={lang}, primary_speech=en-IN, fallback_speech={twilio_lang}")
-    return Response(content=str(response), media_type="application/xml")
+    except Exception as e:
+        logger.exception(f"📞 Voice webhook error for call_log_id={call_log_id}: {e}")
+        from twilio.twiml.voice_response import VoiceResponse as VR
+        err = VR()
+        err.say("Sorry, a technical error occurred. Please try again later.", voice="alice")
+        err.hangup()
+        return Response(content=str(err), media_type="application/xml")
 
 
-@router.post("/process-speech")
-async def process_speech(
+@router.post("/process-recording")
+async def process_recording(
+    request: Request,
+    background_tasks: BackgroundTasks,
     call_log_id: int,
     lang: str = "en",
-    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """
-    Called by Twilio after <Gather speech> captures the patient's answer.
-    Twilio provides the transcription — NO GPU/ASR needed on our end.
-    Runs intent classification, generates multilingual TTS response, plays it.
+    Called by Twilio after <Record> captures the patient's audio.
+    Downloads the recording, sends it to Deepgram Nova-3 for transcription,
+    then runs intent classification and plays a Sarvam TTS confirmation.
     """
     from twilio.twiml.voice_response import VoiceResponse
 
     form = await request.form()
-    speech_result = form.get("SpeechResult", "").strip().lower()
-    confidence = float(form.get("Confidence", "0") or "0")
+    recording_url = form.get("RecordingUrl", "")
+    recording_sid = form.get("RecordingSid", "")
 
     call_log = db.query(models.TwilioCallLog).filter(models.TwilioCallLog.id == call_log_id).first()
     config = get_twilio_config()
@@ -330,176 +628,88 @@ async def process_speech(
         response.hangup()
         return Response(content=str(response), media_type="application/xml")
 
-    # Save transcript from Twilio's speech recognition
+    # --- Transcribe with Deepgram Nova-3 (auto language detection) ---
+    speech_result = ""
+    confidence = 0.0
+    deepgram_detected_lang = lang  # fallback to selected language
+    try:
+        if recording_url:
+            # Twilio recording URL needs .wav suffix for direct access
+            audio_url = f"{recording_url}.wav"
+            dg_result = transcribe_with_deepgram(audio_url, lang)
+            speech_result = dg_result["transcript"].strip()
+            confidence = dg_result["confidence"]
+            deepgram_detected_lang = dg_result.get("detected_language", lang)
+        else:
+            logger.warning(f"📞 No RecordingUrl in callback for call_log_id={call_log_id}")
+    except Exception as e:
+        logger.error(f"📞 Deepgram transcription failed: {e}")
+        speech_result = ""
+        confidence = 0.0
+
+    # Save transcript (preserve native script — do not force .lower() before classification)
     call_log.transcript = speech_result
-    call_log.detected_language = lang
 
-    # Run robust intent classification (CPU only)
-    # Twilio telephony transcripts are often noisy — we use multi-strategy matching:
-    # 1. Fuzzy romanized matching (detects language from keywords)
-    # 2. Native script keyword dictionaries
-    # 3. Short response prefix matching
-    # Also tracks which language the patient ACTUALLY spoke in.
+    # Classify intent in ANY language (independent of UI-selected question language)
+    intent, intent_conf, detected_response_lang = classify_call_response(speech_result, confidence)
+    if intent == "Unclear" and deepgram_detected_lang not in ("en",):
+        detected_response_lang = deepgram_detected_lang
 
-    intent = "Unclear"
-    detected_response_lang = lang  # Default to selected language
-    transcript = speech_result.strip().lower()
-    
-    # Split transcript into individual words for word-level matching
-    words = transcript.split()
-
-    # --- Strategy 1: Fuzzy romanized patterns mapped to their language ---
-    YES_FUZZY_LANG = {
-        "en": ["yes", "yeah", "yep", "yup", "yah", "yea", "ok", "okay", "sure", "done", "right", "correct", "i did", "i have", "i took", "took it", "had it", "taken"],
-        "hi": ["haan", "haa", "han", "hn", "ji", "le liya", "kha liya", "liya", "khaya", "khai"],
-        "kn": ["haudu", "howdu", "agide", "hoo"],
-        "mr": ["ho", "hoye", "ghetale", "gheli"],
-        "ta": ["aam", "aama", "eduthen", "saptiten"],
-        "te": ["avunu", "avunandi", "veskunna"],
-        "bn": ["hyaa", "niyechi", "kheyechi"],
-        "ml": ["athe", "kazhichu", "eduthu"],
-        "gu": ["haa", "lidhi", "khadhi"],
-        "pa": ["haanji", "lai", "kha lai"],
-    }
-    NO_FUZZY_LANG = {
-        "en": ["no", "nope", "nah", "nay", "not", "not yet", "haven't", "didn't", "forgot", "missed", "skip"],
-        "hi": ["nahi", "nahin", "nai", "nahi liya", "nahi khaya", "nahi li", "bhool gaya"],
-        "kn": ["illa", "beda", "agilla"],
-        "mr": ["nahi", "nako", "nay", "ghetale nahi"],
-        "ta": ["illai", "illa", "podala", "edukala"],
-        "te": ["ledu", "kaadu", "vesukoledu"],
-        "bn": ["na", "niini", "khaini"],
-        "ml": ["illa", "kazhichilla"],
-        "gu": ["na", "nathi", "lidhi nathi"],
-        "pa": ["nahi", "nai lyi"],
-    }
-    
-    # Check NO first (to avoid false positives from "na" in longer words)
-    for fuzzy_lang, fuzzy_words in NO_FUZZY_LANG.items():
-        for w in words:
-            if w in fuzzy_words:
-                intent = "No"
-                detected_response_lang = fuzzy_lang
-                break
-        if intent != "Unclear":
-            break
-    if intent == "Unclear":
-        for fuzzy_lang, fuzzy_words in NO_FUZZY_LANG.items():
-            for phrase in fuzzy_words:
-                if " " in phrase and phrase in transcript:
-                    intent = "No"
-                    detected_response_lang = fuzzy_lang
-                    break
-            if intent != "Unclear":
-                break
-
-    # Check YES
-    if intent == "Unclear":
-        for fuzzy_lang, fuzzy_words in YES_FUZZY_LANG.items():
-            for w in words:
-                if w in fuzzy_words:
-                    intent = "Yes"
-                    detected_response_lang = fuzzy_lang
-                    break
-            if intent != "Unclear":
-                break
-    if intent == "Unclear":
-        for fuzzy_lang, fuzzy_words in YES_FUZZY_LANG.items():
-            for phrase in fuzzy_words:
-                if " " in phrase and phrase in transcript:
-                    intent = "Yes"
-                    detected_response_lang = fuzzy_lang
-                    break
-            if intent != "Unclear":
-                break
-
-    # --- Strategy 2: Check all native-script keyword dictionaries ---
-    if intent == "Unclear":
-        for lc, kw in INTENT_KEYWORDS.items():
-            if any(w in transcript for w in kw.get("no", [])):
-                intent = "No"
-                detected_response_lang = lc
-                break
-    if intent == "Unclear":
-        for lc, kw in INTENT_KEYWORDS.items():
-            if any(w in transcript for w in kw.get("yes", [])):
-                intent = "Yes"
-                detected_response_lang = lc
-                break
-    
-    # --- Strategy 3: Short response prefix matching ---
-    if intent == "Unclear" and len(words) <= 2:
-        for w in words:
-            if w.startswith(("ye", "ya", "ha", "ji", "ok", "su", "do", "ri")):
-                intent = "Yes"
-                detected_response_lang = "en"  # Assume English-like
-                break
-            elif w.startswith(("no", "na", "ni", "ne")):
-                intent = "No"
-                detected_response_lang = "en"
-                break
-
-    logger.info(f"📞 Intent detection: transcript='{speech_result}', intent={intent}, spoken_lang={detected_response_lang}, selected_lang={lang}, confidence={confidence}")
+    logger.info(
+        f"📞 Intent: transcript='{speech_result}', intent={intent}, "
+        f"spoken_lang={detected_response_lang}, question_lang={lang}, "
+        f"stt_conf={confidence:.2f}, intent_conf={intent_conf:.2f}"
+    )
 
     call_log.intent = intent
     call_log.detected_language = detected_response_lang
 
-    # Generate confirmation response in the LANGUAGE THE PATIENT ACTUALLY SPOKE
-    response_lang = detected_response_lang
+    response_lang = detected_response_lang if detected_response_lang in SUPPORTED_LANG_CODES else lang
     if intent == "Yes":
         confirmation = random.choice(RESPONSE_YES.get(response_lang, RESPONSE_YES["en"]))
     elif intent == "No":
         confirmation = random.choice(RESPONSE_NO.get(response_lang, RESPONSE_NO["en"]))
     else:
-        confirmation = RESPONSE_UNCLEAR.get(lang, RESPONSE_UNCLEAR["en"])  # Fallback to selected lang
+        confirmation = RESPONSE_UNCLEAR.get(response_lang, RESPONSE_UNCLEAR["en"])
 
     call_log.response_text = confirmation
     call_log.status = "completed"
     call_log.duration = 0
     db.commit()
 
-    # Generate and play TTS confirmation in the detected spoken language
-    conf_file = f"conf_{uuid.uuid4().hex[:8]}.mp3"
-    generate_tts_file(confirmation, response_lang, conf_file)
-    response.play(f"{base_url}/api/twilio/serve-audio/{conf_file}")
+    # Respond immediately: play pre-generated MP3 if ready, else instant Twilio <Say> (no Sarvam wait)
+    conf_file = _resolve_confirmation_file(call_log_id, intent, response_lang)
+    if conf_file:
+        response.play(f"{base_url}/api/twilio/serve-audio/{conf_file}")
+        logger.info(f"📞 Playing pre-generated: {conf_file}")
+    else:
+        say_text = _short_confirmation_text(intent, response_lang)
+        say_voice = TWILIO_SAY_VOICE.get(response_lang, "Polly.Joanna")
+        response.say(say_text, voice=say_voice, language=TWILIO_SPEECH_LANG.get(response_lang, "en-IN"))
+        logger.info(f"📞 Instant Say fallback ({response_lang}): {say_text[:40]}...")
     response.pause(length=1)
     response.hangup()
 
-    # Save to InterviewResponse for dashboard correlation
-    try:
-        patient_id_int = call_log.patient_id
-        if patient_id_int:
-            today = datetime.datetime.utcnow().date()
-            existing_session = db.query(models.InterviewSession).filter(
-                models.InterviewSession.patient_id == patient_id_int,
-                models.InterviewSession.start_time >= datetime.datetime(today.year, today.month, today.day),
-            ).first()
-            if existing_session:
-                db_session_id = existing_session.id
-            else:
-                new_session = models.InterviewSession(patient_id=patient_id_int)
-                db.add(new_session)
-                db.commit()
-                db.refresh(new_session)
-                db_session_id = new_session.id
-            new_response = models.InterviewResponse(
-                session_id=db_session_id,
-                assistant_question=call_log.question_text,
-                patient_transcript=speech_result,
-                detected_language=lang,
-                intent=intent,
-                call_type="twilio",
-                ai_response_text=confirmation,
-            )
-            db.add(new_response)
-            db.commit()
-    except Exception as e:
-        logger.error(f"📞 Failed to save InterviewResponse: {e}")
+    if background_tasks:
+        background_tasks.add_task(
+            _save_interview_response,
+            call_log_id, speech_result, response_lang, intent, confirmation,
+        )
 
-    logger.info(f"📞 ✅ Call completed: intent={intent}, lang={lang}, transcript='{speech_result}', confidence={confidence}")
+    logger.info(
+        f"📞 ✅ Call completed: intent={intent}, lang={response_lang}, "
+        f"transcript='{speech_result[:50]}...', stt_conf={confidence:.2f}"
+    )
     return Response(content=str(response), media_type="application/xml")
 
 
+@router.post("/recording-status")
+async def recording_status(call_log_id: int, request: Request):
+    """Optional: Twilio recording status callback for logging."""
+    form = await request.form()
+    status = form.get("RecordingStatus", "unknown")
+    logger.info(f"📞 Recording status for call_log_id={call_log_id}: {status}")
+    return Response(content="<Response/>", media_type="application/xml")
 
 
 
@@ -538,15 +748,6 @@ async def status_callback(call_log_id: int, request: Request, db: Session = Depe
         logger.info(f"📞 Status update: call_log_id={call_log_id}, status={call_status}")
 
     return Response(content="<Response/>", media_type="application/xml")
-
-
-@router.get("/serve-audio/{filename}")
-async def serve_audio(filename: str):
-    """Serve a pre-generated TTS audio file to Twilio."""
-    filepath = os.path.join(TEMP_AUDIO_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="Audio file not found")
-    return FileResponse(filepath, media_type="audio/mpeg")
 
 
 @router.get("/call-status/{call_log_id}")

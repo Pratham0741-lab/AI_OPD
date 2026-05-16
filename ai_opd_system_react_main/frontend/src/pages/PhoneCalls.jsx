@@ -116,8 +116,16 @@ function PhoneCalls() {
     try {
       const config = await checkTwilioConfig();
       if (config.configured && config.connected) {
-        setTwilioStatus("connected");
-        setTwilioMessage(config.message || "Twilio is connected and ready.");
+        if (config.webhook_reachable === false) {
+          setTwilioStatus("error");
+          setTwilioMessage(
+            (config.webhook_message || "Webhook not reachable.") +
+              " Run: ngrok http 8000 — then update TWILIO_WEBHOOK_BASE_URL in .env"
+          );
+        } else {
+          setTwilioStatus("connected");
+          setTwilioMessage(config.message || "Twilio is connected and ready.");
+        }
       } else if (config.configured) {
         setTwilioStatus("error");
         setTwilioMessage(config.message || "Twilio configured but connection failed.");
@@ -128,9 +136,16 @@ function PhoneCalls() {
             "Twilio not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER in .env"
         );
       }
-    } catch {
+    } catch (err) {
       setTwilioStatus("error");
-      setTwilioMessage("Cannot reach backend. Make sure the Python server is running on port 8000.");
+      const msg = err?.message || "";
+      if (msg.includes("timed out") || msg.includes("timeout")) {
+        setTwilioMessage(
+          "Status check timed out. Ensure Python server (port 8000) and ngrok (ngrok http 8000) are running, then refresh."
+        );
+      } else {
+        setTwilioMessage("Cannot reach backend. Make sure the Python server is running on port 8000.");
+      }
     }
   };
 
@@ -172,7 +187,10 @@ function PhoneCalls() {
     e.preventDefault();
 
     if (twilioStatus !== "connected") {
-      alert("Twilio is not connected. Please check your configuration.");
+      alert(
+        twilioMessage ||
+          "Twilio is not ready. Start ngrok (ngrok http 8000) and ensure TWILIO_WEBHOOK_BASE_URL in .env matches the ngrok HTTPS URL."
+      );
       return;
     }
 

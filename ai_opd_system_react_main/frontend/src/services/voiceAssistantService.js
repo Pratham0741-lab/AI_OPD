@@ -41,7 +41,7 @@ export const transcribeWithGPU = async (audioBlob, language = "auto") => {
 export const checkTwilioConfig = async () => {
   try {
     const response = await fetch(`${VA_BASE_URL}/api/twilio/config`, {
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
     });
     return await response.json();
   } catch (error) {

@@ -25,7 +25,7 @@ from backend.twilio_calls import router as twilio_router, start_scheduler as sta
 from backend.constants import (
     INITIAL_QUESTIONS_EN, INTENT_KEYWORDS,
     RESPONSE_YES, RESPONSE_NO, RESPONSE_UNCLEAR, HEALTH_QUESTIONS,
-    GTTS_LANG_MAP, LANG_NAMES,
+    SARVAM_LANG_MAP, LANG_NAMES,
 )
 
 models.Base.metadata.create_all(bind=engine)
